@@ -126,16 +126,15 @@ namespace PlayerViewer.Player
 
                 WeldTargets[i] = human.SearchBone(name);
 
-                //Rest-rotation delta between the gear bone and the human bone.
-                //Headgear only (authored upright around the head joint): cancels the
-                //head bone's rest twist so only the animated delta rotation transfers.
-                //Weapons/hair/clothes/shoes expect the raw human matrix.
+                //Headgear is authored upright around the head joint. Cancel the
+                //human head bone's rest twist so only the animated delta transfers.
+                //The gear bone's own rest rotation is ignored: models like Hed_COP111
+                //re-use the player skeleton's Head bone (with its ~90° rest twist)
+                //but the mesh is still authored upright in model space.
                 if (uprightWeld && WeldTargets[i] != null && !mirrorLR)
                 {
-                    var partRot = RestWorldRotation(Skeleton.Bones[i]);
                     var humanRot = RestWorldRotation(WeldTargets[i]);
-                    WeldPre[i] = Matrix4.CreateFromQuaternion(partRot) *
-                                 Matrix4.CreateFromQuaternion(Quaternion.Invert(humanRot));
+                    WeldPre[i] = Matrix4.CreateFromQuaternion(Quaternion.Invert(humanRot));
                 }
                 else
                     WeldPre[i] = Matrix4.Identity;

@@ -21,13 +21,18 @@ namespace PlayerViewer.Core
         /// <summary>Whether the overlay participates in lookups.</summary>
         public bool UseLayered { get; }
 
+        /// <summary>Optional Side Order DLC romfs root. Null = none.</summary>
+        public string SdodrRoot { get; }
+
         readonly Dictionary<string, Sarc> _packCache = new(StringComparer.OrdinalIgnoreCase);
 
-        public Romfs(string root, string layeredRoot = null, bool useLayered = false)
+        public Romfs(string root, string layeredRoot = null, bool useLayered = false,
+            string sdodrRoot = null)
         {
             Root = root;
             LayeredRoot = layeredRoot;
             UseLayered = useLayered && !string.IsNullOrEmpty(layeredRoot) && Directory.Exists(layeredRoot);
+            SdodrRoot = !string.IsNullOrEmpty(sdodrRoot) && Directory.Exists(sdodrRoot) ? sdodrRoot : null;
         }
 
         public static bool IsValidRoot(string root)
@@ -49,6 +54,12 @@ namespace PlayerViewer.Core
                 string layered = Path.Combine(LayeredRoot, relativePath);
                 if (File.Exists(layered)) return layered;
                 if (File.Exists(layered + ".zs")) return layered + ".zs";
+            }
+            if (SdodrRoot != null)
+            {
+                string sdodr = Path.Combine(SdodrRoot, relativePath);
+                if (File.Exists(sdodr)) return sdodr;
+                if (File.Exists(sdodr + ".zs")) return sdodr + ".zs";
             }
             string path = Path.Combine(Root, relativePath);
             if (File.Exists(path)) return path;
@@ -112,6 +123,14 @@ namespace PlayerViewer.Core
             if (Directory.Exists(baseDir))
                 foreach (var file in Directory.EnumerateFiles(baseDir, pattern))
                     byName[Path.GetFileName(file)] = file;
+
+            if (SdodrRoot != null)
+            {
+                string sdodrDir = Path.Combine(SdodrRoot, relativeDir);
+                if (Directory.Exists(sdodrDir))
+                    foreach (var file in Directory.EnumerateFiles(sdodrDir, pattern))
+                        byName[Path.GetFileName(file)] = file;
+            }
 
             if (UseLayered)
             {

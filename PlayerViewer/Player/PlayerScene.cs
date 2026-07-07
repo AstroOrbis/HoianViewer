@@ -362,6 +362,18 @@ namespace PlayerViewer.Player
                 : CreatePart(PartKind.Hair, modelName);
             if (part == null) { OnPartsChanged?.Invoke(); return; }
 
+            //Side Order custom hairs (Har_XXX_SdodrCstmNN_F) only embed their own
+            //textures; merge from the base hair (Har_XXX_F) to fill gaps.
+            int sdIdx = modelName.IndexOf("_SdodrCstm", StringComparison.Ordinal);
+            if (!entry.IsCustom && sdIdx > 0)
+            {
+                int suffixStart = modelName.IndexOf('_', sdIdx + "_SdodrCstm".Length);
+                string baseName = suffixStart > 0
+                    ? modelName.Substring(0, sdIdx) + modelName.Substring(suffixStart)
+                    : modelName.Substring(0, sdIdx);
+                MergeBaseAssets(part.Bfres, baseName);
+            }
+
             part.ResolveWelds(Human.Skeleton, HeadBoneMap);
             part.AttachBone = part.Skeleton.SearchBone("Head_Root") ?? part.Skeleton.SearchBone("Root");
             Parts[PartKind.Hair] = part;
@@ -527,12 +539,15 @@ namespace PlayerViewer.Player
 
             var right = entry.IsCustom
                 ? CreateCustomPart(PartKind.ShoeRight, entry)
-                : CreatePart(PartKind.ShoeRight, modelName);
+                : CreatePart(PartKind.ShoeRight, modelName, subModel: modelName + "_R");
             if (right != null)
             {
                 ApplyVariationAnim(right, entry);
-                right.Mirror = true;
-                right.ResolveWelds(Human.Skeleton, null, mirrorLR: true);
+                //If the BFRES contains a dedicated _R sub-model (e.g. Shs_COP104_R),
+                //use it directly; otherwise mirror the left shoe model as usual.
+                bool hasRightModel = right.ModelAsset.ModelData.Name.EndsWith("_R");
+                right.Mirror = !hasRightModel;
+                right.ResolveWelds(Human.Skeleton, null, mirrorLR: !hasRightModel);
                 Parts[PartKind.ShoeRight] = right;
             }
             UpdateAlphaMask();

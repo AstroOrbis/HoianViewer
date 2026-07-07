@@ -32,6 +32,7 @@ namespace PlayerViewer.UI
 
         //--- UI state
         string _romfsInput = "";
+        string _sdodrInput = "";
         string _layeredInput = "";
         string _romfsError = null;
         bool _needsLoad;
@@ -92,6 +93,7 @@ namespace PlayerViewer.UI
         {
             _config = config;
             _romfsInput = config.RomfsPath ?? "";
+            _sdodrInput = config.SdodrRomfsPath ?? "";
             _layeredInput = config.LayeredFsPath ?? "";
         }
 
@@ -130,7 +132,8 @@ namespace PlayerViewer.UI
                 _scene?.Dispose();
                 _scene = null;
 
-                _romfs = new Romfs(_config.RomfsPath, _config.LayeredFsPath, _config.UseLayeredFs);
+                _romfs = new Romfs(_config.RomfsPath, _config.LayeredFsPath, _config.UseLayeredFs,
+                    _config.SdodrRomfsPath);
                 BfresEditor.HoianNXRender.GamePath = _config.RomfsPath;
                 //Decompress/parse the ~25MB UBER shader archive while the database loads.
                 BfresEditor.HoianNXRender.PrewarmShaderArchives();
@@ -432,6 +435,7 @@ namespace PlayerViewer.UI
                     _scene?.Dispose();
                     _scene = null;
                     _romfsInput = _config.RomfsPath ?? "";
+                    _sdodrInput = _config.SdodrRomfsPath ?? "";
                 }
                 if (ImGui.MenuItem("View model file... (or drag && drop)"))
                 {
@@ -466,8 +470,8 @@ namespace PlayerViewer.UI
         void DrawRomfsSetup()
         {
             var avail = ImGui.GetContentRegionAvail();
-            ImGui.SetCursorPos(new Vector2(avail.X / 2 - 260, avail.Y / 2 - 60));
-            ImGui.BeginChild("##setup", new Vector2(520, 150), true);
+            ImGui.SetCursorPos(new Vector2(avail.X / 2 - 260, avail.Y / 2 - 90));
+            ImGui.BeginChild("##setup", new Vector2(520, 210), true);
 
             ImGui.PushStyleColor(ImGuiCol.Text, Theme.Gold);
             ImGui.Text("Splatoon 3 romfs path");
@@ -491,10 +495,24 @@ namespace PlayerViewer.UI
             if (_romfsError != null)
                 ImGui.TextColored(new Vector4(0.9f, 0.35f, 0.3f, 1), _romfsError);
 
+            ImGui.Spacing();
+            ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1), "Side Order DLC romfs (optional)");
+            ImGui.SetNextItemWidth(-90);
+            ImGui.InputText("##sdodr", ref _sdodrInput, 512);
+            ImGui.SameLine();
+            if (ImGui.Button("Browse...##sdodr"))
+            {
+                string folder = NativeFolderPicker.SelectFolder("Select Side Order romfs folder", _sdodrInput);
+                if (!string.IsNullOrEmpty(folder))
+                    _sdodrInput = folder;
+            }
+
+            ImGui.Spacing();
             if (!valid) ImGui.PushStyleVar(ImGuiStyleVar.Alpha, 0.45f);
             if (ImGui.Button("Load", new Vector2(120, 0)) && valid)
             {
                 _config.RomfsPath = _romfsInput;
+                _config.SdodrRomfsPath = _sdodrInput;
                 _config.Save();
                 _needsLoad = true;
             }
@@ -823,7 +841,7 @@ namespace PlayerViewer.UI
             }
 
             //WASD pans in camera space (W/S = forward/back, A/D = left/right).
-            if (!io.WantTextInput)
+            if (!io.WantTextInput && Focused)
             {
                 var kb = Keyboard.GetState();
                 float move = cam.TargetDistance * io.DeltaTime;

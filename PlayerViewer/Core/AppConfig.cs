@@ -10,6 +10,7 @@ namespace PlayerViewer.Core
     public class AppConfig
     {
         public string RomfsPath = "";
+        public string SdodrRomfsPath = "";
         public string LayeredFsPath = "";
         public bool UseLayeredFs = false;
         public int WindowWidth = 1600;
