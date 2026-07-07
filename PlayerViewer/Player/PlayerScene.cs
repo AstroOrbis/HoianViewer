@@ -649,13 +649,25 @@ namespace PlayerViewer.Player
         }
 
         /// <summary>
-        /// Rollers/brushes carry their own fold anims (Open/Close); at rest the
-        /// model is authored in the deployed pose, but a held weapon uses the
-        /// closed one. Bake the CloseOff (or final Close) frame as the part's
-        /// static local pose for its unwelded bones.
+        /// Puts a weapon into its held/closed pose. Brellas hide their Umbrella_Open
+        /// shapes (the deployed canopy). Rollers/brushes bake the final Close/CloseOff
+        /// animation frame as a static local pose for unwelded bones.
         /// </summary>
         void ApplyWeaponCarryPose(PartModel part)
         {
+            //Brellas: hide all Umbrella_Open shapes (the deployed canopy).
+            bool isShelter = part.ModelAsset.Meshes.Any(m =>
+                m.Shape?.Name?.StartsWith("Umbrella_Open") == true);
+            if (isShelter)
+            {
+                foreach (var mesh in part.ModelAsset.Meshes)
+                {
+                    if (mesh.Shape?.Name?.StartsWith("Umbrella_Open") == true)
+                        mesh.Shape.IsVisible = false;
+                }
+                return;
+            }
+
             var anim = part.Bfres.SkeletalAnimations.FirstOrDefault(a => a.Name == "Close")
                 ?? part.Bfres.SkeletalAnimations.FirstOrDefault(a => a.Name == "CloseOff");
             if (anim == null)
