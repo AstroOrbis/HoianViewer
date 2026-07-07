@@ -648,6 +648,9 @@ namespace PlayerViewer.Player
             OnPartsChanged?.Invoke();
         }
 
+        static bool IsShelterOpenShape(string name) =>
+            name != null && (name.StartsWith("Umbrella_Open") || name.StartsWith("OpenMesh"));
+
         /// <summary>
         /// Puts a weapon into its held/closed pose. Brellas hide their Umbrella_Open
         /// shapes (the deployed canopy). Rollers/brushes bake the final Close/CloseOff
@@ -655,21 +658,25 @@ namespace PlayerViewer.Player
         /// </summary>
         void ApplyWeaponCarryPose(PartModel part)
         {
-            //Brellas: hide all Umbrella_Open shapes (the deployed canopy).
-            bool isShelter = part.ModelAsset.Meshes.Any(m =>
-                m.Shape?.Name?.StartsWith("Umbrella_Open") == true);
+            //Brellas: hide deployed-canopy shapes and force the closed canopy visible.
+            //Cstm variants may ship with Umbrella_Close bone hidden, so make it visible as well.
+            bool isShelter = part.ModelAsset.Meshes.Any(m => IsShelterOpenShape(m.Shape?.Name));
             if (isShelter)
             {
                 foreach (var mesh in part.ModelAsset.Meshes)
                 {
-                    if (mesh.Shape?.Name?.StartsWith("Umbrella_Open") == true)
+                    if (IsShelterOpenShape(mesh.Shape?.Name))
                         mesh.Shape.IsVisible = false;
                 }
+                var closeBone = part.Skeleton.SearchBone("Umbrella_Close");
+                if (closeBone != null) closeBone.Visible = true;
+                var openBone = part.Skeleton.SearchBone("Umbrella_Open");
+                if (openBone != null) openBone.Visible = false;
                 return;
             }
 
-            var anim = part.Bfres.SkeletalAnimations.FirstOrDefault(a => a.Name == "Close")
-                ?? part.Bfres.SkeletalAnimations.FirstOrDefault(a => a.Name == "CloseOff");
+            var anim = part.Bfres.SkeletalAnimations.FirstOrDefault(a => a.Name == "CloseOff")
+                ?? part.Bfres.SkeletalAnimations.FirstOrDefault(a => a.Name == "Close");
             if (anim == null)
                 return;
 
@@ -677,17 +684,45 @@ namespace PlayerViewer.Player
             anim.SetFrame(anim.FrameCount);
             anim.NextFrame();   //writes the pose + runs skeleton.Update()
 
+            // The animation's per-bone SSC flags are the ground truth for
+            // whether parent scale should propagate.  STSkeleton.GetWorldMatrix
+            // uses bone.UseSegmentScaleCompensate || ctrl.UseSegmentScaleCompensate
+            // which is too broad: the animation can explicitly disable SSC (e.g.
+            // Roller Wide's Roll bone) so the parent's scale affects the mesh.
+            var animSsc = new HashSet<string>();
+            foreach (var group in anim.AnimGroups)
+            {
+                var bg = (BfresSkeletalAnim.BoneAnimGroup)group;
+                if (bg.UseSegmentScaleCompensate)
+                    animSsc.Add(bg.Name);
+            }
+
             part.PoseOverride = new Dictionary<string, PartModel.PoseSrt>();
+            var accumScale = new Dictionary<string, Vector3>();
+
             foreach (var bone in part.Skeleton.Bones)
             {
-                var local = bone.Parent != null
-                    ? bone.Transform * Matrix4.Invert(bone.Parent.Transform)
-                    : bone.Transform;
+                var ctrl = bone.AnimationController;
+
+                bool inAnim = anim.AnimGroups.Any(g => g.Name == bone.Name);
+                bool ssc = inAnim ? animSsc.Contains(bone.Name)
+                                  : bone.UseSegmentScaleCompensate;
+
+                Vector3 parentAccum = (bone.Parent != null &&
+                    accumScale.TryGetValue(bone.Parent.Name, out var pa)) ? pa : Vector3.One;
+
+                Vector3 ownScale = ctrl.Scale;
+                Vector3 meshScale = ssc ? ownScale
+                    : new Vector3(ownScale.X * parentAccum.X,
+                                  ownScale.Y * parentAccum.Y,
+                                  ownScale.Z * parentAccum.Z);
+                accumScale[bone.Name] = meshScale;
+
                 part.PoseOverride[bone.Name] = new PartModel.PoseSrt
                 {
-                    Position = local.ExtractTranslation(),
-                    Rotation = local.ExtractRotation(),
-                    Scale = local.ExtractScale(),
+                    Position = ctrl.Position,
+                    Rotation = ctrl.Rotation,
+                    Scale = meshScale,
                 };
             }
         }

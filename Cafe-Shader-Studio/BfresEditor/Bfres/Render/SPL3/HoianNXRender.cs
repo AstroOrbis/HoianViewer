@@ -828,7 +828,12 @@ namespace BfresEditor
 
         void OverrideMaterialUniforms(UniformBlock block, int blockSize)
         {
-            if (!ParentModel.Name.StartsWith("Har_")) return;
+            string model = ParentModel.Name;
+            bool isHair = model.StartsWith("Har_");
+            bool isRollerBrush = model.Contains("Roller") || model.Contains("Brush");
+            if (!isHair && !isRollerBrush) return;
+
+            float paintIntensity = isHair ? 0f : 1f;
 
             var matBlock = ShaderModel.UniformBlocks.Values.FirstOrDefault(x =>
                 x.Type == BfshaLibrary.UniformBlock.BlockType.Material);
@@ -842,7 +847,7 @@ namespace BfresEditor
 
                 int offset = param.Offset - 1;
                 if (offset + 4 <= block.Buffer.Count)
-                    WriteFloat(block.Buffer, offset, 0f);
+                    WriteFloat(block.Buffer, offset, paintIntensity);
                 break;
             }
         }
