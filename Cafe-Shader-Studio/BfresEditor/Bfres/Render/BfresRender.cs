@@ -22,6 +22,8 @@ namespace BfresEditor
 
         public bool UpdateProbeMap = true;
 
+        private System.Threading.Tasks.Task _prefetchTask;
+
         public static GLFrameworkEngine.ShaderProgram DefaultShader => GlobalShaders.GetShader("BFRES", "BFRES/Bfres");
         public static GLFrameworkEngine.ShaderProgram ShadowProgram => GlobalShaders.GetShader("BFRES", "BFRES/Picking");
         private static GLFrameworkEngine.ShaderProgram PickingShaderCustom=> GlobalShaders.GetShader("BFRES", "BFRES/Shadow");
@@ -148,7 +150,7 @@ namespace BfresEditor
             //Deswizzle texture data on background threads so the first draw
             //doesn't stall on serial CPU decode during texture upload.
             var texList = Textures.Values.ToList();
-            System.Threading.Tasks.Task.Run(() => GLFrameworkEngine.TextureDataPrefetch.PrefetchAll(texList));
+            _prefetchTask = System.Threading.Tasks.Task.Run(() => GLFrameworkEngine.TextureDataPrefetch.PrefetchAll(texList));
 
             //Update frame bounding spheres
             List<Vector3> positons = new List<Vector3>();
@@ -454,11 +456,15 @@ namespace BfresEditor
 
         public override void Dispose()
         {
+            _prefetchTask?.Wait();
 
             foreach (BfresModelAsset model in Models)
                 model.Destroy();
             foreach (var tex in Textures.Values)
+            {
+                GLFrameworkEngine.TextureDataPrefetch.Remove(tex);
                 tex.RenderableTex?.Dispose();
+            }
 
             Models.Clear();
             Textures.Clear();
@@ -473,6 +479,7 @@ namespace BfresEditor
 
             CafeShaderDecoder.GLShaderPrograms.Clear();
             TegraShaderDecoder.GLShaderPrograms.Clear();
+            TegraShaderDecoder.ClearInfoCache();
         }
     }
 }

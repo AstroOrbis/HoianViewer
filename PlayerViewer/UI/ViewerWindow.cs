@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime;
 using Vector2 = System.Numerics.Vector2;
 using Vector4 = System.Numerics.Vector4;
 using CafeStudio.UI;
@@ -131,6 +132,7 @@ namespace PlayerViewer.UI
                 _standalone = null;
                 _scene?.Dispose();
                 _scene = null;
+                CompactHeap();
 
                 _romfs = new Romfs(_config.RomfsPath, _config.LayeredFsPath, _config.UseLayeredFs,
                     _config.SdodrRomfsPath);
@@ -259,7 +261,12 @@ namespace PlayerViewer.UI
                 return;
             try
             {
+                bool hadPrevious = _standalone != null;
                 _standalone?.Dispose();
+                _standalone = null;
+                if (hadPrevious)
+                    CompactHeap();
+
                 _standalone = StandaloneScene.FromFile(file, _romfs);
                 _standaloneError = _standalone == null ? "Failed to load model" : null;
                 if (_standalone != null)
@@ -281,7 +288,16 @@ namespace PlayerViewer.UI
             _standalone = null;
             _standaloneError = null;
             _animSearch = "";
+            CompactHeap();
             _pipeline.FramePlayer();
+        }
+
+        static void CompactHeap()
+        {
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, true, true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, true, true);
         }
 
         protected override void OnClosed(EventArgs e)

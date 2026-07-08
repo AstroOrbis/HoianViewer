@@ -98,6 +98,12 @@ namespace GLFrameworkEngine
             return surfaces;
         }
 
+        public static void Remove(STGenericTexture texture)
+        {
+            _cache.TryRemove(texture, out _);
+        }
+
         public static void Clear() => _cache.Clear();
+        public static int CacheCount => _cache.Count;
     }
 }

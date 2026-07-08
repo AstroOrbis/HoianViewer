@@ -20,7 +20,7 @@ namespace PlayerViewer.Player
         {
             try
             {
-                var resFile = new BfresLibrary.ResFile(new MemoryStream(rawData));
+                var resFile = bfres.ResFile;
 
                 if (resFile.ExternalFiles.ContainsKey("share_tex_list.txt"))
                 {

@@ -198,6 +198,14 @@ namespace PlayerViewer.Player
         {
             DataCache.ModelCache.Remove(Render.ID);
             Render.Dispose();
+            Render = null;
+            Bfres = null;
+            AnimNames.Clear();
+            CurrentSkeletal = null;
+            CurrentTexPattern = null;
+            CurrentBoneVis = null;
+            _defaultBoneVisibility.Clear();
+            _defaultShapeVisibility.Clear();
         }
     }
 }

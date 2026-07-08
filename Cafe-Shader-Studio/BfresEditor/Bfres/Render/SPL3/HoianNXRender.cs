@@ -1010,6 +1010,8 @@ namespace BfresEditor
         static readonly Dictionary<int, Dictionary<string, ActiveUniformType>> _samplerTypeCache =
             new Dictionary<int, Dictionary<string, ActiveUniformType>>();
 
+        public static void ClearRuntimeCaches() => _samplerTypeCache.Clear();
+
         static Dictionary<string, ActiveUniformType> GetSamplerTypes(int programID)
         {
             if (_samplerTypeCache.TryGetValue(programID, out var cached))

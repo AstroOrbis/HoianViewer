@@ -109,7 +109,7 @@ namespace PlayerViewer.Player
         //cached render re-equips instantly. LRU-capped; state that varies per equip
         //(variation mat anims, welds, bone visibility, arrange) is re-applied by the
         //setters anyway.
-        const int PartCacheCapacity = 16;
+        const int PartCacheCapacity = 5;
         readonly Dictionary<string, BFRES> _partCache = new();
         readonly List<string> _partCacheLru = new();    //front = oldest
 

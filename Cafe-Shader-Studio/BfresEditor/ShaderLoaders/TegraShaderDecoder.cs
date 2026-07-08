@@ -15,6 +15,9 @@ namespace BfresEditor
         public static Dictionary<string, ShaderProgram> GLShaderPrograms = new Dictionary<string, ShaderProgram>();
         static Dictionary<string, ShaderInfo> _shaderInfoCache = new Dictionary<string, ShaderInfo>();
 
+        public static void ClearInfoCache() => _shaderInfoCache.Clear();
+        public static int ShaderInfoCacheCount => _shaderInfoCache.Count;
+
         public static readonly System.Diagnostics.Stopwatch TotalTime = new System.Diagnostics.Stopwatch();
         public static int LoadCount = 0;
 
