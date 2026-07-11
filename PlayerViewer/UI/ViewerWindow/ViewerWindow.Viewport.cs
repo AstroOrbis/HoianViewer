@@ -1,0 +1,123 @@
+using System;
+using Vector2 = System.Numerics.Vector2;
+using Vector4 = System.Numerics.Vector4;
+using ImGuiNET;
+using OpenTK;
+using OpenTK.Input;
+using PlayerViewer.Player;
+
+namespace PlayerViewer.UI
+{
+    // Center viewport: renders the active scene and handles orbit/pan/zoom camera input.
+    public partial class ViewerWindow
+    {
+        //--- viewport camera input
+        bool _viewportHovered;
+        bool _mouseDown;
+
+        IViewScene ActiveScene => _standalone != null ? _standalone : _scene;
+
+        void DrawViewport()
+        {
+            var size = ImGui.GetContentRegionAvail();
+            if (!_recorder.IsRecording)
+                _pipeline.Resize((int)size.X, (int)size.Y);
+
+            _pipeline.Render(ActiveScene);
+
+            var pos = ImGui.GetCursorScreenPos();
+            ImGui.Image((IntPtr)_pipeline.ViewportTextureId, new Vector2(_pipeline.Width, _pipeline.Height),
+                new Vector2(0, 1), new Vector2(1, 0));
+
+            _viewportHovered = ImGui.IsItemHovered();
+            //Freeze the camera during a full-animation export so every frame shares
+            //the exact same viewpoint.
+            if (!_animExporting)
+                UpdateCameraInput(pos);
+
+            //Recording indicator overlay
+            if (_recorder.IsRecording)
+            {
+                var draw = ImGui.GetWindowDrawList();
+                draw.AddCircleFilled(new Vector2(pos.X + 18, pos.Y + 18), 7,
+                    ImGui.GetColorU32(new Vector4(0.9f, 0.15f, 0.15f, 1)));
+                var cursor = ImGui.GetCursorPos();
+                ImGui.SetCursorScreenPos(new Vector2(pos.X + 32, pos.Y + 10));
+                ImGui.TextColored(new Vector4(1, 1, 1, 1), $"REC {_recorder.FrameCount / 60.0f:F1}s");
+                ImGui.SetCursorPos(cursor);
+            }
+        }
+
+        void UpdateCameraInput(Vector2 viewportScreenPos)
+        {
+            var io = ImGui.GetIO();
+            var cam = _pipeline.Camera;
+            bool changed = false;
+
+            bool leftDown = ImGui.IsMouseDown(ImGuiMouseButton.Left);
+            bool rightDown = ImGui.IsMouseDown(ImGuiMouseButton.Right);
+            bool midDown = ImGui.IsMouseDown(ImGuiMouseButton.Middle);
+            bool anyDown = leftDown || rightDown || midDown;
+
+            //Drags only start inside the viewport, but keep tracking outside it.
+            if (_viewportHovered && anyDown && !_mouseDown)
+                _mouseDown = true;
+            if (!anyDown)
+                _mouseDown = false;
+
+            if (_mouseDown)
+            {
+                var delta = io.MouseDelta;
+                if (midDown || (leftDown && io.KeyShift))
+                {
+                    //Pan, scaled so the model roughly follows the cursor.
+                    float scale = (float)Math.Sin(cam.Fov) * cam.TargetDistance;
+                    float dx = -delta.X / Math.Max(1, cam.Width) * scale;
+                    float dy = delta.Y / Math.Max(1, cam.Height) * scale;
+                    var rot = cam.InverseRotationMatrix;
+                    cam.TargetPosition += rot.Row0 * dx + rot.Row1 * dy;
+                    changed = true;
+                }
+                else if (leftDown || rightDown)
+                {
+                    //Orbit around the target.
+                    cam.RotationY += delta.X * 0.008f;
+                    cam.RotationX += delta.Y * 0.008f;
+                    cam.RotationX = MathHelper.Clamp(cam.RotationX,
+                        -MathHelper.PiOver2 + 0.01f, MathHelper.PiOver2 - 0.01f);
+                    changed = true;
+                }
+            }
+
+            if (_viewportHovered && io.MouseWheel != 0)
+            {
+                cam.TargetDistance = Math.Max(0.05f,
+                    cam.TargetDistance * (1.0f - io.MouseWheel * 0.12f));
+                changed = true;
+            }
+
+            //WASD pans in camera space (W/S = forward/back, A/D = left/right).
+            if (!io.WantTextInput && Focused)
+            {
+                var kb = Keyboard.GetState();
+                float move = cam.TargetDistance * io.DeltaTime;
+                var dir = OpenTK.Vector3.Zero;
+                var rot = cam.InverseRotationMatrix;
+                if (kb.IsKeyDown(Key.W)) dir -= rot.Row2;
+                if (kb.IsKeyDown(Key.S)) dir += rot.Row2;
+                if (kb.IsKeyDown(Key.A)) dir -= rot.Row0;
+                if (kb.IsKeyDown(Key.D)) dir += rot.Row0;
+                if (kb.IsKeyDown(Key.Space)) dir += rot.Row1;
+                if (kb.IsKeyDown(Key.ShiftLeft) || kb.IsKeyDown(Key.ShiftRight)) dir -= rot.Row1;
+                if (dir != OpenTK.Vector3.Zero)
+                {
+                    cam.TargetPosition += dir * move;
+                    changed = true;
+                }
+            }
+
+            if (changed)
+                cam.UpdateMatrices();
+        }
+    }
+}

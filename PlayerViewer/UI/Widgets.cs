@@ -109,5 +109,13 @@ namespace PlayerViewer.UI
             ImGui.SameLine(92);
             drawControl();
         }
+
+        /// <summary>Full-width button that dims and no-ops when disabled.</summary>
+        public static void DisabledButton(string label, bool enabled, Action onClick)
+        {
+            if (!enabled) ImGui.PushStyleVar(ImGuiStyleVar.Alpha, 0.45f);
+            if (ImGui.Button(label, new Vector2(-1, 0)) && enabled) onClick();
+            if (!enabled) ImGui.PopStyleVar();
+        }
     }
 }

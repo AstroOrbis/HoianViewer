@@ -14,6 +14,14 @@ namespace PlayerViewer.UI
     /// </summary>
     public class VideoRecorder : IDisposable
     {
+        public enum OutputFormat
+        {
+            /// <summary>H.264 MP4, opaque (yuv420p). Alpha is discarded.</summary>
+            Mp4,
+            /// <summary>Lossless animated WebP that preserves the RGBA alpha channel.</summary>
+            WebpTransparent,
+        }
+
         const int MaxQueuedFrames = 30;
 
         readonly record struct CapturedFrame(byte[] Pixels, long Slot);
@@ -27,6 +35,11 @@ namespace PlayerViewer.UI
         int _droppedFrames;
         Stopwatch _recClock;
         long _lastCapturedSlot;
+
+        //Lockstep mode: 1 PushFrame = 1 output frame per PushFrame call,
+        // with no drops and deterministic timing.
+        bool _lockstep;
+        long _lockstepSlot;
 
         public bool IsRecording { get; private set; }
         public int FrameCount { get; private set; }
@@ -68,7 +81,8 @@ namespace PlayerViewer.UI
             }
         }
 
-        public bool Start(int width, int height, string outputPath, int fps = 60)
+        public bool Start(int width, int height, string outputPath, int fps = 60,
+            bool lockstep = false, OutputFormat format = OutputFormat.Mp4)
         {
             if (IsRecording || !FfmpegAvailable)
                 return false;
@@ -78,15 +92,31 @@ namespace PlayerViewer.UI
             OutputPath = outputPath;
             FrameCount = 0;
             _droppedFrames = 0;
+            _lockstep = lockstep;
+            _lockstepSlot = 0;
+
+            //All formats consume the same raw RGBA stream; only the output codec
+            //differs. WebP keeps the alpha channel for a transparent background;
+            //MP4 flattens it. -vf vflip corrects OpenGL's bottom-up row order.
+            string input = $"-y -f rawvideo -pixel_format rgba -video_size {_width}x{_height} " +
+                           $"-framerate {fps} -i pipe:0 -vf vflip ";
+            //Use libwebp_anim, not libwebp: the plain encoder blends each frame over the
+            //previous canvas, so transparent pixels ghost the old frame; libwebp_anim
+            //replaces the canvas per frame. Under -lossless 1 the output is bit-identical
+            //regardless of the effort knobs, which only trade encode SPEED for file size:
+            //compression_level stays at the default 4 (level 6 is ~7x slower), and q:v is
+            //the entropy-search effort (NOT quality) — q=100 roughly doubled encode time for
+            //a <0.5% smaller file and stalled exports once the queue filled, so use 75.
+            string codec = format == OutputFormat.WebpTransparent
+                ? $"-c:v libwebp_anim -lossless 1 -compression_level 4 -q:v 75 -loop 0 -an \"{outputPath}\""
+                : $"-c:v libx264 -preset veryfast -pix_fmt yuv420p -crf 16 \"{outputPath}\"";
 
             try
             {
                 var psi = new ProcessStartInfo
                 {
                     FileName = ResolveFfmpeg(),
-                    Arguments = $"-y -f rawvideo -pixel_format rgba -video_size {_width}x{_height} " +
-                                $"-framerate {fps} -i pipe:0 -vf vflip -c:v libx264 -preset veryfast " +
-                                $"-pix_fmt yuv420p -crf 16 \"{outputPath}\"",
+                    Arguments = input + codec,
                     UseShellExecute = false,
                     RedirectStandardInput = true,
                     RedirectStandardError = true,
@@ -125,6 +155,9 @@ namespace PlayerViewer.UI
         {
             if (!IsRecording)
                 return false;
+            // If in lockstep, always capture the next frame for output
+            if (_lockstep)
+                return true;
 
             long slot = (long)Math.Floor(_recClock.Elapsed.TotalSeconds * _fps);
             return slot > _lastCapturedSlot;
@@ -179,6 +212,21 @@ namespace PlayerViewer.UI
             if ((width & ~1) != _width || (height & ~1) != _height)
             {
                 ArrayPool<byte>.Shared.Return(rgba);
+                return;
+            }
+
+            if (_lockstep)
+            {
+                //Never drop; block until the encoder drains a slot
+                try
+                {
+                    _queue.Add(new CapturedFrame(rgba, _lockstepSlot++));
+                    FrameCount++;
+                }
+                catch
+                {
+                    ArrayPool<byte>.Shared.Return(rgba);
+                }
                 return;
             }
 

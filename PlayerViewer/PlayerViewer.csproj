@@ -64,4 +64,10 @@
   <Target Name="CopyPluginDlls" AfterTargets="Build">
     <Copy SourceFiles="$(OutDir)BfresEditor.dll" DestinationFolder="$(OutDir)Plugins" SkipUnchangedFiles="true" />
   </Target>
+
+  <!-- Publish drops files into $(PublishDir), which the Build-time target above doesn't
+       populate, so the plugin scan directory must be recreated there too. -->
+  <Target Name="CopyPluginDllsOnPublish" AfterTargets="Publish">
+    <Copy SourceFiles="$(PublishDir)BfresEditor.dll" DestinationFolder="$(PublishDir)Plugins" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

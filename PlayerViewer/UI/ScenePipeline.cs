@@ -381,6 +381,32 @@ namespace PlayerViewer.UI
             }
         }
 
+        /// <summary>
+        /// Renders one frame at the current viewport size into the display buffers and
+        /// returns raw bottom-up RGBA8 bytes (OpenGL row order, ffmpeg-ready).
+        /// transparent=true keeps the real alpha channel; otherwise the frame is
+        /// composited over <paramref name="background"/> opaquely. The buffer is rented
+        /// from <see cref="System.Buffers.ArrayPool{T}"/>; ownership transfers to the caller.
+        /// Synchronous, so every frame deterministically maps 1:1.
+        /// </summary>
+        public byte[] CaptureFrameBytes(IViewScene scene, System.Numerics.Vector3 background,
+            bool transparent, out int width, out int height)
+        {
+            width = Width;
+            height = Height;
+            RenderInternal(scene, _screen, _final, Width, Height, ScaleFor(Width, Height),
+                new System.Numerics.Vector4(background.X, background.Y, background.Z, transparent ? 0 : 1),
+                transparent, _screenDepth);
+
+            int size = Width * Height * 4;
+            var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(size);
+            _final.Bind();
+            GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
+            GL.ReadPixels(0, 0, Width, Height, PixelFormat.Rgba, PixelType.UnsignedByte, buf);
+            _final.Unbind();
+            return buf;
+        }
+
         /// <summary>Reads the current final buffer (viewport-sized), for video frames.</summary>
         public byte[] ReadFinalPixels()
         {

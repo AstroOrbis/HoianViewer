@@ -1,0 +1,57 @@
+using System.Linq;
+using Vector2 = System.Numerics.Vector2;
+using Vector4 = System.Numerics.Vector4;
+using ImGuiNET;
+
+namespace PlayerViewer.UI
+{
+    // Left-hand panel shown when viewing a loose (dropped/browsed) BFRES model.
+    public partial class ViewerWindow
+    {
+        void DrawStandalonePanel()
+        {
+            Widgets.SectionHeader("Standalone Model");
+
+            ImGui.TextColored(Theme.GoldBright, _standalone.Name);
+            ImGui.PushTextWrapPos();
+            ImGui.TextColored(Theme.TextDim, _standalone.SourcePath);
+            ImGui.PopTextWrapPos();
+            if (_standaloneError != null)
+                ImGui.TextColored(new Vector4(0.9f, 0.35f, 0.3f, 1), _standaloneError);
+
+            ImGui.Spacing();
+            if (ImGui.Button("Back to player", new Vector2(-1, 0)))
+            {
+                CloseStandalone();
+                return;
+            }
+            if (ImGui.Button("Frame model", new Vector2(-1, 0)))
+                _pipeline.FrameSphere(_standalone.GetBounding());
+
+            var models = _standalone.Render.Models.OfType<BfresEditor.BfresModelAsset>().ToList();
+            Widgets.SectionHeader("Models");
+            for (int mi = 0; mi < models.Count; mi++)
+            {
+                var model = models[mi];
+                bool visible = model.IsVisible;
+                if (ImGui.Checkbox($"##{mi}_vis", ref visible))
+                    model.IsVisible = visible;
+                ImGui.SameLine();
+                if (ImGui.TreeNode($"{model.ModelData.Name}##{mi}"))
+                {
+                    foreach (var mesh in model.Meshes)
+                    {
+                        bool meshVis = mesh.Shape.IsVisible;
+                        if (ImGui.Checkbox($"{mesh.Name}##{mi}_{mesh.Name}", ref meshVis))
+                            mesh.Shape.IsVisible = meshVis;
+                    }
+                    ImGui.TreePop();
+                }
+            }
+
+            DrawLightingSection();
+            DrawTeamColorSection();
+            DrawViewSection();
+        }
+    }
+}

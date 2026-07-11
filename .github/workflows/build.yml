@@ -1,4 +1,4 @@
-name: Build Windows
+name: Build
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
       - name: Restore
         run: dotnet restore PlayerViewer/PlayerViewer.csproj
 
-      - name: Publish (self-contained win-x64)
+      - name: Publish
         run: >
           dotnet publish PlayerViewer/PlayerViewer.csproj
           -c Release
