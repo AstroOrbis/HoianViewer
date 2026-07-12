@@ -34,6 +34,15 @@ namespace PlayerViewer.UI
                 int q = Math.Clamp(quality, 0, 100);
                 return $"-c:v libwebp_anim -lossless 0 -compression_level 4 -q:v {q} -loop 0 -an \"{outputPath}\"";
             }
+            if (format == VideoRecorder.OutputFormat.WebmTransparent)
+            {
+                //VP9 with an alpha plane (yuva420p). quality 100 = lossless; below maps to a VP9
+                //CRF (0 best .. 63 worst). cpu-used/deadline trade encode speed for size.
+                if (quality >= 100)
+                    return $"-c:v libvpx-vp9 -pix_fmt yuva420p -lossless 1 -cpu-used 4 -deadline good -an \"{outputPath}\"";
+                int crf = Math.Clamp((100 - quality) * 63 / 100, 0, 63);
+                return $"-c:v libvpx-vp9 -pix_fmt yuva420p -b:v 0 -crf {crf} -cpu-used 4 -deadline good -an \"{outputPath}\"";
+            }
             return $"-c:v libx264 -preset veryfast -pix_fmt yuv420p -crf 16 \"{outputPath}\"";
         }
 

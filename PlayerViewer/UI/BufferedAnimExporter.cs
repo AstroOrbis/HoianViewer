@@ -210,7 +210,7 @@ namespace PlayerViewer.UI
                 proc.BeginErrorReadLine();
                 var stdin = proc.StandardInput.BaseStream;
 
-                bool mp4 = format != VideoRecorder.OutputFormat.WebpTransparent;
+                bool composite = format == VideoRecorder.OutputFormat.Mp4;
                 byte gr = (byte)(Math.Clamp(greenColor.X, 0f, 1f) * 255);
                 byte gg = (byte)(Math.Clamp(greenColor.Y, 0f, 1f) * 255);
                 byte gb = (byte)(Math.Clamp(greenColor.Z, 0f, 1f) * 255);
@@ -228,7 +228,7 @@ namespace PlayerViewer.UI
                     {
                         int srcRow = ((y0 + ry) * _width + x0) * 4;
                         int dstRow = ry * cw * 4;
-                        if (mp4)
+                        if (composite)
                         {
                             //Composite straight-alpha source over the greenscreen background.
                             for (int rx = 0; rx < cw; rx++)

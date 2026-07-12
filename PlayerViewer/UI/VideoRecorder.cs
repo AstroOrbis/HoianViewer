@@ -18,8 +18,10 @@ namespace PlayerViewer.UI
         {
             /// <summary>H.264 MP4, opaque (yuv420p). Alpha is discarded.</summary>
             Mp4,
-            /// <summary>Lossless animated WebP that preserves the RGBA alpha channel.</summary>
+            /// <summary>Animated WebP that preserves the RGBA alpha channel.</summary>
             WebpTransparent,
+            /// <summary>VP9 WebM that preserves the alpha channel (yuva420p).</summary>
+            WebmTransparent,
         }
 
         const int MaxQueuedFrames = 30;

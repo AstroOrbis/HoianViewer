@@ -24,6 +24,7 @@ namespace PlayerViewer.UI
             "PNG (current frame)",
             "MP4 (greenscreen)",
             "WebP (transparent)",
+            "WebM (transparent)",
             "Record (real-time)",
         };
 
@@ -196,8 +197,8 @@ namespace PlayerViewer.UI
                 SaveCaptureSettings();
 
             bool isPng = _exportFormat == 0;
-            bool isRecord = _exportFormat == 3;
-            bool isAnim = _exportFormat == 1 || _exportFormat == 2;
+            bool isRecord = _exportFormat == 4;
+            bool isAnim = _exportFormat >= 1 && _exportFormat <= 3;
 
             //Format-specific option row.
             if (isPng)
@@ -243,6 +244,7 @@ namespace PlayerViewer.UI
             0 => "Export PNG",
             1 => sequence ? "Export MP4 (sequence)" : "Export MP4",
             2 => sequence ? "Export WebP (sequence)" : "Export WebP",
+            3 => sequence ? "Export WebM (sequence)" : "Export WebM",
             _ => "Start recording",
         };
 
@@ -253,7 +255,8 @@ namespace PlayerViewer.UI
                 case 0: SaveScreenshot(); break;
                 case 1: StartAnimExport(VideoRecorder.OutputFormat.Mp4, transparent: false); break;
                 case 2: StartAnimExport(VideoRecorder.OutputFormat.WebpTransparent, transparent: true); break;
-                case 3: StartRecording(); break;
+                case 3: StartAnimExport(VideoRecorder.OutputFormat.WebmTransparent, transparent: true); break;
+                case 4: StartRecording(); break;
             }
         }
 
@@ -375,11 +378,14 @@ namespace PlayerViewer.UI
             if (total < 1)
                 return;
 
-            string ext = transparent ? ".webp" : ".mp4";
+            (string ext, string filterName, string filterExt) = format switch
+            {
+                VideoRecorder.OutputFormat.WebpTransparent => (".webp", "WebP image (*.webp)", "*.webp"),
+                VideoRecorder.OutputFormat.WebmTransparent => (".webm", "WebM video (*.webm)", "*.webm"),
+                _ => (".mp4", "MP4 video (*.mp4)", "*.mp4"),
+            };
             string def = ExportUtil.Timestamped("animation", ext);
-            string path = transparent
-                ? NativeFolderPicker.SaveFile("Export Animation", def, "WebP image (*.webp)", "*.webp")
-                : NativeFolderPicker.SaveFile("Export Animation", def, "MP4 video (*.mp4)", "*.mp4");
+            string path = NativeFolderPicker.SaveFile("Export Animation", def, filterName, filterExt);
             if (string.IsNullOrEmpty(path))
                 return;
             if (!path.EndsWith(ext, StringComparison.OrdinalIgnoreCase))

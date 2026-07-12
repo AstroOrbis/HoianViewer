@@ -84,7 +84,7 @@ namespace PlayerViewer.UI
         BufferedAnimExporter _bufferedExporter;   //non-null during the trim (buffered) export
 
         //--- Unified capture UI
-        int _exportFormat;   //0 = PNG, 1 = MP4, 2 = WebP, 3 = Record (real-time)
+        int _exportFormat;   //0 PNG, 1 MP4, 2 WebP, 3 WebM, 4 Record (real-time)
         bool _showSettings;
         //Self-correcting layout: capture controls stay pinned, the animation list absorbs
         //slack. We size the list from last frame's measured control height.
@@ -104,7 +104,7 @@ namespace PlayerViewer.UI
 
             //Restore persisted capture-panel selections (clamped in case ranges changed).
             _captureRes = Math.Clamp(config.CaptureResIndex, 0, CaptureSizes.Length - 1);
-            _exportFormat = Math.Clamp(config.ExportFormat, 0, 3);
+            _exportFormat = Math.Clamp(config.ExportFormat, 0, 4);
             _exportFps = config.ExportFps == 30 ? 30 : 60;
             _captureTransparent = config.CaptureTransparent;
             _recordGreenscreen = config.RecordGreenscreen;

@@ -52,9 +52,9 @@ namespace PlayerViewer.UI
                     "to a temp file on disk first; transiently uses ~width×height×4×frames of space, " +
                     "times the supersample factor squared (several GB at 4K, tens of GB with high supersample).");
 
-            Widgets.SectionHeader("WebP quality");
-            ImGui.TextWrapped("100 = lossless (bit-exact, largest). Lower = lossy: much faster " +
-                "to encode and far smaller, with some quality loss.");
+            Widgets.SectionHeader("WebP / WebM quality");
+            ImGui.TextWrapped("Quality for the transparent WebP and WebM (VP9) exports. 100 = " +
+                "lossless (largest). Lower = lossy: smaller and faster to encode, with some quality loss.");
             ImGui.Spacing();
 
             int quality = _config.WebpQuality;
