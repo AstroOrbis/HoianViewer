@@ -39,10 +39,8 @@
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
   </ItemGroup>
 
-  <!-- OpenTK 3.x's Windows display driver needs Microsoft.Win32.SystemEvents, which used to
-       arrive transitively via System.Drawing.Common. With SDC no longer flowing here, reference
-       it directly on Windows; the Linux (X11) and macOS drivers don't need it. -->
   <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
     <PackageReference Include="Microsoft.Win32.SystemEvents" Version="8.0.0" />
   </ItemGroup>
 
