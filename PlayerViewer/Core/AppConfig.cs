@@ -98,7 +98,7 @@ namespace PlayerViewer.Core
         //this many extra times before recording starts without capturing. Physics reset
         //whenever an animation loads, so frame 0 has a twitch each time the exported
         //WebP/WebM loops. A warm-up lets the sim settle first. 0 = disabled.
-        public int PrerollLoops = 0;
+        public int PrerollLoops = 1;
 
         //--- Capture-panel selections (persisted so they stick between runs)
         public int CaptureResIndex = 2; //index into the resolution dropdown

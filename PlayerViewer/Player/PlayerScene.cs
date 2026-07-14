@@ -250,9 +250,8 @@ namespace PlayerViewer.Player
 
             animTask.Wait();
 
-            //Defaults: id 0 rows. Weapon defaults to none ("Free" in game terms).
-            //Head defaults to Hed_INV000 (the game's invisible no-headgear actor,
-            //which still applies default hair-arrange presets).
+            //Defaults: id 0 rows. Weapon and Tank default to none so they can stay unequipped.
+            //Head defaults to Hed_INV000 (no-headgear actor, still applies hair-arrange presets).
             CurrentHead ??= Database.Head.FirstOrDefault(x => x.RowId == "Hed_INV000");
             CurrentHair ??=
                 Database.Hair.FirstOrDefault(x => x.Id == 0) ?? Database.Hair.FirstOrDefault();
@@ -261,8 +260,6 @@ namespace PlayerViewer.Player
                 ?? Database.Eyebrow.FirstOrDefault();
             CurrentBottom ??=
                 Database.Bottom.FirstOrDefault(x => x.Id == 0) ?? Database.Bottom.FirstOrDefault();
-            CurrentTank ??=
-                Database.Tank.FirstOrDefault(x => x.Id == 0) ?? Database.Tank.FirstOrDefault();
 
             //Rebuild all parts against the new skeleton.
             SetHair(CurrentHair);
