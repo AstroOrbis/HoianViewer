@@ -41,6 +41,15 @@ namespace PlayerViewer.UI
             set { _lightElevation = value; _lightCustomized = true; }
         }
 
+        /// <summary>Restores the dumped default lighting (follow-cam off, no override).</summary>
+        public void ResetLighting()
+        {
+            LightFollowsCamera = false;
+            _lightAzimuth = 100;
+            _lightElevation = -55;
+            _lightCustomized = false;   //fall back to the dumped default direction
+        }
+
         void UpdateLightOverride()
         {
             if (LightFollowsCamera)
@@ -76,6 +85,12 @@ namespace PlayerViewer.UI
         Framebuffer _final;     //RGBA8 (sRGB encoded by the gamma pass)
         FinalQuad _quad;
         SelfShadowRenderer _selfShadow;
+
+        //Live export-background preview: a fullscreen textured quad drawn behind the scene in
+        //opaque passes. The pixels come from ExportUtil.BuildBackground so the preview matches
+        //the exported composite exactly.
+        readonly BackgroundQuad _bgQuad = new();
+        int _bgTex;
 
         //Half-res color copy for refraction (once per frame, between opaque/transparent).
         int _refractionFbo;
@@ -309,6 +324,12 @@ namespace PlayerViewer.UI
                 GL.Viewport(0, 0, ssWidth, ssHeight);
                 GL.ClearColor(Lin(background.X), Lin(background.Y), Lin(background.Z), background.W);
                 GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit | ClearBufferMask.StencilBufferBit);
+
+                //Opaque (viewport / non-alpha) passes preview the export background behind the
+                //scene. Transparent capture (keepAlpha) skips it so the alpha oracle is intact.
+                if (!keepAlpha && _bgTex != 0)
+                    _bgQuad.Draw(Context, _bgTex);
+
                 GL.Enable(EnableCap.DepthTest);
 
                 if (scene != null)
@@ -443,108 +464,106 @@ namespace PlayerViewer.UI
             return buf;
         }
 
-        /// <summary>Reads the current final buffer (viewport-sized), for video frames.</summary>
-        public byte[] ReadFinalPixels()
-        {
-            var pixels = new byte[Width * Height * 4];
-            _final.Bind();
-            GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
-            GL.ReadPixels(0, 0, Width, Height, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
-            _final.Unbind();
-            return pixels;
-        }
-
-        #region PBO async readback (video recording)
-
-        int[] _pbo = new int[2];
-        int _pboIndex;
-        int _pboWidth, _pboHeight;
-        bool _pboReady;
-
-        void EnsurePBOs(int w, int h)
-        {
-            int size = w * h * 4;
-            if (_pbo[0] != 0 && _pboWidth == w && _pboHeight == h)
-                return;
-            DisposePBOs();
-            _pboWidth = w;
-            _pboHeight = h;
-            GL.GenBuffers(2, _pbo);
-            for (int i = 0; i < 2; i++)
-            {
-                GL.BindBuffer(BufferTarget.PixelPackBuffer, _pbo[i]);
-                GL.BufferData(BufferTarget.PixelPackBuffer, size, IntPtr.Zero, BufferUsageHint.StreamRead);
-            }
-            GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
-            _pboIndex = 0;
-            _pboReady = false;
-        }
-
-        void DisposePBOs()
-        {
-            if (_pbo[0] != 0)
-                GL.DeleteBuffers(2, _pbo);
-            _pbo[0] = _pbo[1] = 0;
-            _pboReady = false;
-        }
-
         /// <summary>
-        /// Initiates an async readback of the final buffer into a PBO, and returns
-        /// the *previous* frame's data (one frame of latency). Returns null on the
-        /// first call while the pipeline fills. This never stalls the GPU because
-        /// the readback target is always one frame behind.
-        /// The returned buffer is rented from ArrayPool; the caller MUST return it
-        /// via <see cref="ReturnFrameBuffer"/> after use.
+        /// Uploads a full-frame straight-RGBA buffer as the live background preview (drawn behind
+        /// the scene in opaque passes). Pass null to clear it (Transparent mode).
         /// </summary>
-        public byte[] ReadFinalPixelsAsync(out int frameSize)
+        public void SetBackgroundBuffer(byte[] rgba, int w, int h)
         {
-            EnsurePBOs(Width, Height);
-            frameSize = _pboWidth * _pboHeight * 4;
-
-            int readPbo = _pboIndex;
-            int mapPbo = 1 - _pboIndex;
-
-            _final.Bind();
-            GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
-            GL.BindBuffer(BufferTarget.PixelPackBuffer, _pbo[readPbo]);
-            GL.ReadPixels(0, 0, _pboWidth, _pboHeight, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
-            GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
-            _final.Unbind();
-
-            byte[] result = null;
-            if (_pboReady)
+            if (rgba == null || w <= 0 || h <= 0)
             {
-                GL.BindBuffer(BufferTarget.PixelPackBuffer, _pbo[mapPbo]);
-                IntPtr ptr = GL.MapBuffer(BufferTarget.PixelPackBuffer, BufferAccess.ReadOnly);
-                if (ptr != IntPtr.Zero)
-                {
-                    result = System.Buffers.ArrayPool<byte>.Shared.Rent(frameSize);
-                    System.Runtime.InteropServices.Marshal.Copy(ptr, result, 0, frameSize);
-                    GL.UnmapBuffer(BufferTarget.PixelPackBuffer);
-                }
-                GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
+                if (_bgTex != 0) { GL.DeleteTexture(_bgTex); _bgTex = 0; }
+                return;
             }
-
-            _pboIndex = mapPbo;
-            _pboReady = true;
-            return result;
+            if (_bgTex == 0) _bgTex = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture2D, _bgTex);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, w, h, 0,
+                PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
         }
-
-        public static void ReturnFrameBuffer(byte[] buf)
-        {
-            if (buf != null)
-                System.Buffers.ArrayPool<byte>.Shared.Return(buf);
-        }
-
-        #endregion
 
         public void Dispose()
         {
-            DisposePBOs();
             DisposeRefraction();
+            if (_bgTex != 0) { GL.DeleteTexture(_bgTex); _bgTex = 0; }
             _screen?.Dispoe();
             _final?.Dispoe();
             _selfShadow?.Dispose();
+        }
+    }
+
+    /// <summary>Fullscreen quad that draws the background texture (sRGB) into the linear scene
+    /// buffer, linearizing so the gamma pass restores it; transparent texels are discarded so
+    /// letterbox/off-frame areas keep the clear color.</summary>
+    class BackgroundQuad
+    {
+        ShaderProgram _shader;
+        VertexBufferObject _vao;
+
+        const string Vert =
+            "#version 330\n" +
+            "layout (location = 0) in vec2 aPos;\n" +
+            "layout (location = 1) in vec2 aTexCoords;\n" +
+            "out vec2 TexCoords;\n" +
+            "void main(){ gl_Position = vec4(aPos, 0.0, 1.0); TexCoords = aTexCoords; }\n";
+
+        const string Frag =
+            "#version 330\n" +
+            "precision highp float;\n" +
+            "in vec2 TexCoords;\n" +
+            "uniform sampler2D uTex;\n" +
+            "out vec4 FragColor;\n" +
+            "void main(){\n" +
+            "  vec4 c = texture(uTex, TexCoords);\n" +
+            "  if (c.a < 0.004) discard;\n" +
+            "  FragColor = vec4(pow(c.rgb, vec3(2.2)), 1.0);\n" +
+            "}\n";
+
+        void Init()
+        {
+            if (_shader != null)
+                return;
+            _shader = new ShaderProgram(new FragmentShader(Frag), new VertexShader(Vert));
+
+            int buffer = GL.GenBuffer();
+            _vao = new VertexBufferObject(buffer);
+            _vao.AddAttribute(0, 2, VertexAttribPointerType.Float, false, 16, 0);
+            _vao.AddAttribute(1, 2, VertexAttribPointerType.Float, false, 16, 8);
+            _vao.Initialize();
+
+            float[] data =
+            {
+                -1,  1, 0, 1,
+                -1, -1, 0, 0,
+                 1,  1, 1, 1,
+                 1, -1, 1, 0,
+            };
+            GL.BufferData(BufferTarget.ArrayBuffer, sizeof(float) * data.Length, data, BufferUsageHint.StaticDraw);
+        }
+
+        public void Draw(GLContext context, int tex)
+        {
+            Init();
+            GL.Disable(EnableCap.Blend);
+            GL.Disable(EnableCap.CullFace);
+            GL.Disable(EnableCap.DepthTest);
+            GL.DepthMask(false);
+
+            context.CurrentShader = _shader;
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, tex);
+            _shader.SetInt("uTex", 0);
+
+            _vao.Enable(_shader);
+            _vao.Use();
+            GL.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            GL.UseProgram(0);
+            GL.DepthMask(true);
         }
     }
 

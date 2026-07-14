@@ -4,7 +4,35 @@ using Newtonsoft.Json;
 
 namespace PlayerViewer.Core
 {
-    
+    /// <summary>
+    /// Composited export/viewport background. Part of <see cref="PlayerConfig"/> so it travels
+    /// with a preset (a preset captures the whole look: gear, colors, and background).
+    /// </summary>
+    public class BackgroundConfig
+    {
+        public int Mode;                              //0 Transparent, 1 Color, 2 Image
+        public float[] Color = { 0f, 1f, 0f };        //Color mode; green reproduces the old greenscreen
+        public string ImagePath = "";
+        public int ScaleMode;                         //0 Fill, 1 Fit, 2 Stretch
+        public float Zoom = 1f;
+        public float OffsetX;
+        public float OffsetY;
+        public bool Tile;
+        public int TileX = 1;
+        public int TileY = 1;
+
+        //Clamp user-supplied (preset/settings) values into valid ranges.
+        public void Normalize()
+        {
+            Mode = System.Math.Clamp(Mode, 0, 2);
+            ScaleMode = System.Math.Clamp(ScaleMode, 0, 2);
+            if (Color == null || Color.Length < 3) Color = new[] { 0f, 1f, 0f };
+            ImagePath ??= "";
+            TileX = System.Math.Max(1, TileX);
+            TileY = System.Math.Max(1, TileY);
+        }
+    }
+
     public class PlayerConfig
     {
         public int PlayerType;
@@ -32,6 +60,9 @@ namespace PlayerViewer.Core
         public float[] CustomAlpha = { 0.925f, 0.243f, 0.549f };
         public float[] CustomBravo = { 0.196f, 0.855f, 0.302f };
         public float[] CustomCharlie = { 0.980f, 0.769f, 0.196f };
+
+        //Composited export/viewport background, saved and loaded with the preset.
+        public BackgroundConfig Background = new();
     }
 
 
@@ -59,13 +90,16 @@ namespace PlayerViewer.Core
         //capture size; with trim on, the crop keeps that internal resolution so a loosely
         //framed subject still exports sharp. VRAM and temp-disk use scale with the square.
         public int ExportSupersample = 1;
+        //Physics warm-up: plays the animation (/ first animation in the sequence) through
+        //this many extra times before recording starts without capturing. Physics reset
+        //whenever an animation loads, so frame 0 has a twitch each time the exported
+        //WebP/WebM loops. A warm-up lets the sim settle first. 0 = disabled.
+        public int PrerollLoops = 0;
 
         //--- Capture-panel selections (persisted so they stick between runs)
         public int CaptureResIndex = 2;    //index into the resolution dropdown
-        public int ExportFormat = 0;       //0 PNG, 1 MP4, 2 WebP, 3 Record
+        public int ExportFormat = 0;       //0 PNG, 1 MP4, 2 WebP, 3 WebM
         public int ExportFps = 60;
-        public bool CaptureTransparent = true;
-        public bool RecordGreenscreen = true;
         public int AnimMode = 0;           //0 Single, 1 Sequence
 
         public PlayerConfig Player = new();

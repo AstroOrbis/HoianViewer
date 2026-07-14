@@ -27,9 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="OpenTK">
-      <HintPath>..\CafeShaderStudio\Lib\OpenTK.dll</HintPath>
-    </Reference>
+    <PackageReference Include="OpenTK" Version="3.1.0" />
     <Reference Include="Toolbox.Core">
       <HintPath>..\CafeShaderStudio\Lib\Toolbox.Core.dll</HintPath>
     </Reference>

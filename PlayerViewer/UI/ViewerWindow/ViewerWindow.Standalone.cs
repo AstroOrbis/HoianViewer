@@ -15,10 +15,10 @@ namespace PlayerViewer.UI
 
             ImGui.TextColored(Theme.GoldBright, _standalone.Name);
             ImGui.PushTextWrapPos();
-            ImGui.TextColored(Theme.TextDim, _standalone.SourcePath);
+            Widgets.DimText(_standalone.SourcePath);
             ImGui.PopTextWrapPos();
             if (_standaloneError != null)
-                ImGui.TextColored(new Vector4(0.9f, 0.35f, 0.3f, 1), _standaloneError);
+                Widgets.ErrorText(_standaloneError);
 
             ImGui.Spacing();
             if (ImGui.Button("Back to player", new Vector2(-1, 0)))

@@ -21,15 +21,18 @@ namespace PlayerViewer.UI
         {
             var size = ImGui.GetContentRegionAvail();
 
-            //Freeze the render size while recording OR exporting: the deterministic export
-            //(and the trim path's temp buffer) assume every frame shares fixed dimensions.
-            if (!_recorder.IsRecording && !_animExporting)
+            //Freeze the render size while exporting: the deterministic export (and the trim
+            //path's temp buffer) assume every frame shares fixed dimensions.
+            if (!_animExporting)
                 _pipeline.Resize((int)size.X, (int)size.Y);
 
             //During an export the capture pass already renders each frame (often supersampled),
             // so skip the redundant viewport render and just preview the last captured frame.
             if (!_animExporting)
+            {
+                UpdateBackgroundPreview();
                 _pipeline.Render(ActiveScene);
+            }
 
             var pos = ImGui.GetCursorScreenPos();
             //Fit the render texture into the region, preserving aspect. Normally its already
@@ -44,18 +47,6 @@ namespace PlayerViewer.UI
             //the exact same viewpoint.
             if (!_animExporting)
                 UpdateCameraInput(pos);
-
-            //Recording indicator overlay
-            if (_recorder.IsRecording)
-            {
-                var draw = ImGui.GetWindowDrawList();
-                draw.AddCircleFilled(new Vector2(pos.X + 18, pos.Y + 18), 7,
-                    ImGui.GetColorU32(new Vector4(0.9f, 0.15f, 0.15f, 1)));
-                var cursor = ImGui.GetCursorPos();
-                ImGui.SetCursorScreenPos(new Vector2(pos.X + 32, pos.Y + 10));
-                ImGui.TextColored(new Vector4(1, 1, 1, 1), $"REC {_recorder.FrameCount / 60.0f:F1}s");
-                ImGui.SetCursorPos(cursor);
-            }
         }
 
         void UpdateCameraInput(Vector2 viewportScreenPos)

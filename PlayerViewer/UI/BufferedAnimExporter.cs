@@ -4,14 +4,13 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
-using Vector3 = System.Numerics.Vector3;
 
 namespace PlayerViewer.UI
 {
     /// <summary>
-    /// Multiphase animation exporter used when "trim deadspace" is on. Because the crop
-    /// rectangle can't be known until every frame has been seen, frames can't be streamed
-    /// straight to ffmpeg the way <see cref="VideoRecorder"/> does. Instead:
+    /// Multiphase animation exporter. Because the crop rectangle (for trim) can't be known
+    /// until every frame has been seen, frames are buffered to disk rather than streamed
+    /// straight to ffmpeg. Instead:
     ///
     ///   Pass 1 (capture): each transparent RGBA frame is handed to a worker thread that
     ///   appends it to a temp file on disk and expands a running content bounding box over
@@ -142,7 +141,7 @@ namespace PlayerViewer.UI
         /// Ends capture and kicks off the encode pass on a worker thread. Returns immediately;
         /// poll <see cref="IsEncoding"/> / <see cref="EncodeProgress"/> for progress.
         /// </summary>
-        public void FinishCapture(VideoRecorder.OutputFormat format, Vector3 greenColor,
+        public void FinishCapture(OutputFormat format, byte[] background,
             int webpQuality, int marginPx)
         {
             if (!IsCapturing)
@@ -160,12 +159,12 @@ namespace PlayerViewer.UI
             catch (Exception ex) { Error ??= ex.Message; }
 
             IsEncoding = true;
-            _encoder = new Thread(() => EncodeLoop(format, greenColor, webpQuality, marginPx))
+            _encoder = new Thread(() => EncodeLoop(format, background, webpQuality, marginPx))
             { IsBackground = true, Name = "AnimExportEncode" };
             _encoder.Start();
         }
 
-        void EncodeLoop(VideoRecorder.OutputFormat format, Vector3 greenColor, int webpQuality, int marginPx)
+        void EncodeLoop(OutputFormat format, byte[] background, int webpQuality, int marginPx)
         {
             int frameBytes = _width * _height * 4;
             byte[] frame = null;
@@ -210,10 +209,9 @@ namespace PlayerViewer.UI
                 proc.BeginErrorReadLine();
                 var stdin = proc.StandardInput.BaseStream;
 
-                bool composite = format == VideoRecorder.OutputFormat.Mp4;
-                byte gr = (byte)(Math.Clamp(greenColor.X, 0f, 1f) * 255);
-                byte gg = (byte)(Math.Clamp(greenColor.Y, 0f, 1f) * 255);
-                byte gb = (byte)(Math.Clamp(greenColor.Z, 0f, 1f) * 255);
+                //A background buffer (full-frame, same layout as the source) means composite the
+                //straight-alpha scene over it; null means keep the alpha channel (WebP/WebM).
+                bool composite = background != null;
 
                 frame = ArrayPool<byte>.Shared.Rent(frameBytes);
                 var outBuf = new byte[cw * ch * 4];
@@ -230,15 +228,16 @@ namespace PlayerViewer.UI
                         int dstRow = ry * cw * 4;
                         if (composite)
                         {
-                            //Composite straight-alpha source over the greenscreen background.
+                            //Composite straight-alpha source over the background buffer (same
+                            //full-frame layout, so the source index maps directly into it).
                             for (int rx = 0; rx < cw; rx++)
                             {
                                 int s = srcRow + rx * 4, d = dstRow + rx * 4;
                                 byte a = frame[s + 3];
                                 int ia = 255 - a;
-                                outBuf[d] = (byte)((frame[s] * a + gr * ia) / 255);
-                                outBuf[d + 1] = (byte)((frame[s + 1] * a + gg * ia) / 255);
-                                outBuf[d + 2] = (byte)((frame[s + 2] * a + gb * ia) / 255);
+                                outBuf[d] = (byte)((frame[s] * a + background[s] * ia) / 255);
+                                outBuf[d + 1] = (byte)((frame[s + 1] * a + background[s + 1] * ia) / 255);
+                                outBuf[d + 2] = (byte)((frame[s + 2] * a + background[s + 2] * ia) / 255);
                                 outBuf[d + 3] = 255;
                             }
                         }

@@ -144,7 +144,7 @@ namespace PlayerViewer.UI
             ImGui.Checkbox("Loop", ref _chainLoop);
             ImGui.SameLine();
             if (_chainActive)
-                RedButton("Stop preview", StopAnimChain);
+                Widgets.RedButton("Stop preview", StopAnimChain);
             else
                 Widgets.DisabledButton("Preview", _animChain.Count > 0, StartAnimChainPreview);
         }

@@ -33,7 +33,6 @@ namespace PlayerViewer.UI
         Romfs _romfs;
         GameDatabase _db;
         PlayerScene _scene;
-        readonly VideoRecorder _recorder = new();
 
         //--- UI state
         string _romfsInput = "";
@@ -56,7 +55,6 @@ namespace PlayerViewer.UI
         };
         float _uiFrame;   //frame slider mirror
         int _captureRes = 2;   //index into CaptureSizes
-        bool _captureTransparent = true;
 
         //--- Standalone model viewing (dropped/browsed files, outside the player)
         StandaloneScene _standalone;
@@ -72,20 +70,24 @@ namespace PlayerViewer.UI
         int _animExportTotal;      //frame count of the animation
         float _animExportAdvance;  //animation frames advanced per output frame ((60/fps) * speed)
         int _exportFps = 60;       //two-tick control: 30 or 60
-        bool _animExportTransparent;
         bool _animExportTrim;      //snapshot of TrimDeadspace taken at export start
         int _animExportSupersample;//snapshot of ExportSupersample taken at export start
         bool _animExportChain;     //exporting the whole sequence (Sequence mode) vs a single anim
-        VideoRecorder.OutputFormat _animExportFormat;
-        System.Numerics.Vector3 _animExportGreen;
+        OutputFormat _animExportFormat;
+        byte[] _animExportBg;      //full-frame composite background (null = keep alpha)
         bool _animExportPrevPaused;
         float _animExportPrevFrame;
-        System.Numerics.Vector3 _animExportPrevBg;
         BufferedAnimExporter _bufferedExporter;   //non-null during the trim (buffered) export
 
         //--- Unified capture UI
-        int _exportFormat;   //0 PNG, 1 MP4, 2 WebP, 3 WebM, 4 Record (real-time)
+        int _exportFormat;   //0 PNG, 1 MP4, 2 WebP, 3 WebM
         bool _showSettings;
+
+        //--- Background: the data lives on _config.Player.Background (saved with the preset);
+        //these only track when the live viewport preview buffer needs rebuilding.
+        Core.BackgroundConfig Bg => _config.Player.Background;
+        bool _bgDirty = true;              //rebuild the live preview buffer on next frame
+        int _bgPreviewW = -1, _bgPreviewH = -1;
         //Self-correcting layout: capture controls stay pinned, the animation list absorbs
         //slack. We size the list from last frame's measured control height.
         float _measuredCaptureHeight = 220;
@@ -104,11 +106,13 @@ namespace PlayerViewer.UI
 
             //Restore persisted capture-panel selections (clamped in case ranges changed).
             _captureRes = Math.Clamp(config.CaptureResIndex, 0, CaptureSizes.Length - 1);
-            _exportFormat = Math.Clamp(config.ExportFormat, 0, 4);
+            _exportFormat = Math.Clamp(config.ExportFormat, 0, 3);
             _exportFps = config.ExportFps == 30 ? 30 : 60;
-            _captureTransparent = config.CaptureTransparent;
-            _recordGreenscreen = config.RecordGreenscreen;
             _animMode = config.AnimMode == 1 ? 1 : 0;
+
+            //Background now lives on the player config (travels with presets); clamp on load.
+            config.Player.Background ??= new Core.BackgroundConfig();
+            config.Player.Background.Normalize();
         }
 
         protected override void OnLoad(EventArgs e)
@@ -321,7 +325,6 @@ namespace PlayerViewer.UI
 
         protected override void OnClosed(EventArgs e)
         {
-            _recorder.Dispose();
             //Aborts any in-flight capture/encode and deletes the temp raw buffer.
             _bufferedExporter?.Dispose();
             //Width/Height are 0 when closed while minimized; don't persist that.
@@ -391,20 +394,9 @@ namespace PlayerViewer.UI
 
             SwapBuffers();
 
-            //Frame-exact export: render this frame with the chosen background and push
-            //it synchronously (no PBO latency), then advance to the next animation frame.
+            //Frame-exact export: capture this frame synchronously, then advance the timeline.
             if (_animExporting)
-            {
                 CaptureAnimExportFrame();
-            }
-            //Real-time recording: check timing BEFORE the readback so we skip the GPU
-            //transfer entirely for frames we'd drop.
-            else if (_recorder.IsCaptureDue())
-            {
-                var pixels = _pipeline.ReadFinalPixelsAsync(out _);
-                if (pixels != null)
-                    _recorder.PushFrame(pixels, _pipeline.Width, _pipeline.Height);
-            }
         }
     }
 }

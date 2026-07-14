@@ -39,9 +39,7 @@
     <Reference Include="ImGui.NET">
       <HintPath>..\CafeShaderStudio\Lib\ImGui.NET.dll</HintPath>
     </Reference>
-    <Reference Include="OpenTK">
-      <HintPath>..\CafeShaderStudio\Lib\OpenTK.dll</HintPath>
-    </Reference>
+    <PackageReference Include="OpenTK" Version="3.1.0" />
     <Reference Include="Syroot.BinaryData">
       <HintPath>..\CafeShaderStudio\Lib\Syroot.BinaryData.dll</HintPath>
     </Reference>

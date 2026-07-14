@@ -37,7 +37,7 @@ namespace PlayerViewer.UI
             if (ImGui.Button("Load preset", new Vector2(half, 0)))
                 LoadPreset();
             if (!string.IsNullOrEmpty(_presetStatus))
-                ImGui.TextColored(Theme.TextDim, _presetStatus);
+                Widgets.DimText(_presetStatus);
 
             int playerType = _scene.PlayerType;
             ImGui.SetNextItemWidth(-1);
@@ -48,50 +48,38 @@ namespace PlayerViewer.UI
                 SavePlayerConfig();
             }
 
-            GearRow("Hair", GearSlot.Hair, _db.Hair, _scene.CurrentHair);
-            GearRow("Eyebrow", GearSlot.Eyebrow, _db.Eyebrow, _scene.CurrentEyebrow);
+            GearRow("Hair", GearSlot.Hair, _scene.CurrentHair);
+            GearRow("Eyebrow", GearSlot.Eyebrow, _scene.CurrentEyebrow);
 
-            int eye = _scene.EyeColor;
             Widgets.LabeledRow("Eyes", () =>
             {
                 ImGui.SetNextItemWidth(-1);
-                if (ImGui.SliderInt("##eye", ref eye, 0, 20))
-                {
-                    _scene.ApplyEyeColor(eye);
-                    SavePlayerConfig();
-                }
+                Widgets.SliderInt("##eye", _scene.EyeColor, 0, 20, v => _scene.ApplyEyeColor(v), SavePlayerConfig);
             });
 
-            int skin = _scene.SkinTone;
             Widgets.LabeledRow("Skin", () =>
             {
                 ImGui.SetNextItemWidth(-1);
-                if (ImGui.SliderInt("##skin", ref skin, 0, 8))
-                {
-                    _scene.ApplySkinTone(skin);
-                    SavePlayerConfig();
-                }
+                Widgets.SliderInt("##skin", _scene.SkinTone, 0, 8, v => _scene.ApplySkinTone(v), SavePlayerConfig);
             });
 
-            bool hairPhys = _scene.HairPhysicsEnabled;
-            if (ImGui.Checkbox("Hair physics", ref hairPhys))
+            Widgets.Checkbox("Hair physics", _scene.HairPhysicsEnabled, v =>
             {
-                _scene.HairPhysicsEnabled = hairPhys;
-                if (hairPhys)
-                    _scene.ResetHairPhysics();
-            }
+                _scene.HairPhysicsEnabled = v;
+                if (v) _scene.ResetHairPhysics();
+            });
 
             DrawTeamColorSection();
 
             Widgets.SectionHeader("Gear");
-            GearRow("Head", GearSlot.Head, _db.Head, _scene.CurrentHead, allowNone: false);
-            GearRow("Clothes", GearSlot.Clothes, _db.Clothes, _scene.CurrentClothes);
-            GearRow("Bottom", GearSlot.Bottom, _db.Bottom, _scene.CurrentBottom);
-            GearRow("Shoes", GearSlot.Shoes, _db.Shoes, _scene.CurrentShoes);
+            GearRow("Head", GearSlot.Head, _scene.CurrentHead, allowNone: false);
+            GearRow("Clothes", GearSlot.Clothes, _scene.CurrentClothes);
+            GearRow("Bottom", GearSlot.Bottom, _scene.CurrentBottom);
+            GearRow("Shoes", GearSlot.Shoes, _scene.CurrentShoes);
 
             Widgets.SectionHeader("Equipment");
-            GearRow("Weapon", GearSlot.MainWeapon, _db.MainWeapons, _scene.CurrentWeapon, noneLabel: "Free");
-            GearRow("Tank", GearSlot.Tank, _db.Tank, _scene.CurrentTank);
+            GearRow("Weapon", GearSlot.MainWeapon, _scene.CurrentWeapon, noneLabel: "Free");
+            GearRow("Tank", GearSlot.Tank, _scene.CurrentTank);
 
             DrawLightingSection();
             DrawViewSection();
@@ -108,15 +96,9 @@ namespace PlayerViewer.UI
                 else
                     _pipeline.FramePlayer();
             }
-            var bg = _pipeline.BackgroundColor;
-            if (ImGui.ColorEdit3("Background", ref bg, ImGuiColorEditFlags.NoInputs))
-                _pipeline.BackgroundColor = bg;
 
-            bool selfShadow = _pipeline.EnableSelfShadow;
-            if (ImGui.Checkbox("Self shadow", ref selfShadow))
-                _pipeline.EnableSelfShadow = selfShadow;
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Game-accurate self shadowing (gsys_shadow_prepass).");
+            Widgets.Checkbox("Self shadow", _pipeline.EnableSelfShadow, v => _pipeline.EnableSelfShadow = v);
+            Widgets.ItemTooltip("Game-accurate self shadowing (gsys_shadow_prepass).");
 
             int setIdx = Math.Max(Array.IndexOf(UniformSetDirs, BfresEditor.HoianNXRender.UniformSetDir), 0);
             Widgets.LabeledRow("Env", () =>
@@ -128,23 +110,23 @@ namespace PlayerViewer.UI
                     ApplyTeamColor();
                 }
             });
+
+            //Background (mode/color/image) lives on the preset; folded in here on the left.
+            DrawBackgroundSection();
         }
 
         void DrawLightingSection()
         {
             Widgets.SectionHeader("Lighting");
-            bool followCam = _pipeline.LightFollowsCamera;
-            if (ImGui.Checkbox("Light follows camera", ref followCam))
-                _pipeline.LightFollowsCamera = followCam;
-            if (!followCam)
+            if (ImGui.Button("Reset lighting", new Vector2(-1, 0)))
+                _pipeline.ResetLighting();
+            Widgets.Checkbox("Light follows camera", _pipeline.LightFollowsCamera, v => _pipeline.LightFollowsCamera = v);
+            if (!_pipeline.LightFollowsCamera)
             {
-                float az = _pipeline.LightAzimuth, el = _pipeline.LightElevation;
                 ImGui.SetNextItemWidth(-1);
-                if (ImGui.SliderFloat("##lightaz", ref az, -180, 180, "Azimuth %.0f°"))
-                    _pipeline.LightAzimuth = az;
+                Widgets.SliderFloat("##lightaz", _pipeline.LightAzimuth, -180, 180, v => _pipeline.LightAzimuth = v, null, "Azimuth %.0f°");
                 ImGui.SetNextItemWidth(-1);
-                if (ImGui.SliderFloat("##lightel", ref el, -89, 89, "Elevation %.0f°"))
-                    _pipeline.LightElevation = el;
+                Widgets.SliderFloat("##lightel", _pipeline.LightElevation, -89, 89, v => _pipeline.LightElevation = v, null, "Elevation %.0f°");
             }
         }
 
@@ -236,36 +218,33 @@ namespace PlayerViewer.UI
                 }
             }
 
-            bool useLayered = _config.UseLayeredFs;
-            if (ImGui.Checkbox("Enable LayeredFS", ref useLayered))
+            Widgets.Checkbox("Enable LayeredFS", _config.UseLayeredFs, v => _config.UseLayeredFs = v, () =>
             {
-                _config.UseLayeredFs = useLayered;
                 _config.Save();
                 _preserveStateOnLoad = true;
                 _needsLoad = true;
-            }
+            });
 
             bool dirOk = !string.IsNullOrEmpty(_layeredInput) && Directory.Exists(_layeredInput);
             if (!string.IsNullOrEmpty(_layeredInput) && !dirOk)
-                ImGui.TextColored(new Vector4(0.9f, 0.35f, 0.3f, 1), "folder not found");
+                Widgets.ErrorText("folder not found");
             else if (_romfs != null && _romfs.UseLayered)
-                ImGui.TextColored(new Vector4(0.4f, 0.85f, 0.4f, 1), "active");
+                Widgets.SuccessText("active");
 
             if (ImGui.Button("Reload", new Vector2(-1, 0)))
             {
                 _preserveStateOnLoad = true;
                 _needsLoad = true;
             }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Reload everything from the current romfs + LayeredFS.\nKeeps the current player configuration.");
+            Widgets.ItemTooltip("Reload everything from the current romfs + LayeredFS.\nKeeps the current player configuration.");
         }
 
-        void GearRow(string label, GearSlot slot, List<GearEntry> entries, GearEntry current,
+        void GearRow(string label, GearSlot slot, GearEntry current,
             bool allowNone = true, string noneLabel = "Blank")
         {
             Widgets.LabeledRow(label, () =>
             {
-                if (Widgets.GearCombo(label, entries, current, out var selected, allowNone, noneLabel))
+                if (Widgets.GearCombo(label, _db.GetList(slot), current, out var selected, allowNone, noneLabel))
                 {
                     _scene.SetGear(slot, selected);
                     SavePlayerConfig();
@@ -370,6 +349,11 @@ namespace PlayerViewer.UI
 
             _scene.ApplyEyeColor(p.EyeColor);
             _scene.ApplySkinTone(p.SkinTone);
+
+            //Background travels with the preset; clamp loaded values and rebuild the live preview.
+            p.Background ??= new Core.BackgroundConfig();
+            p.Background.Normalize();
+            _bgDirty = true;
         }
     }
 }

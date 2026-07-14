@@ -57,9 +57,7 @@
     <Reference Include="LZ4.Frame">
       <HintPath>..\CafeShaderStudio\Lib\LZ4.Frame.dll</HintPath>
     </Reference>
-    <Reference Include="OpenTK">
-      <HintPath>..\CafeShaderStudio\Lib\OpenTK.dll</HintPath>
-    </Reference>
+    <PackageReference Include="OpenTK" Version="3.1.0" />
     <Reference Include="Ryujinx.Common">
       <HintPath>..\CafeShaderStudio\Lib\Ryujinx.Common.dll</HintPath>
     </Reference>

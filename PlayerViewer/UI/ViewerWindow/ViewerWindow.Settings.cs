@@ -26,28 +26,18 @@ namespace PlayerViewer.UI
 
             Widgets.SectionHeader("Trim deadspace");
             ImGui.TextWrapped("Crops fully-transparent space off exported frames, shrinking " +
-                "file size. Uses the transparent render to find the content, so it also crops " +
-                "greenscreen MP4s. Applies to WebP, MP4, and PNG screenshots.");
+                "file size. Uses the transparent render to find the content, so it crops the " +
+                "color/image background too. Applies to WebP, WebM, MP4, and PNG.");
             ImGui.Spacing();
 
-            bool trim = _config.TrimDeadspace;
-            if (ImGui.Checkbox("Enable", ref trim))
-            {
-                _config.TrimDeadspace = trim;
-                dirty = true;
-            }
+            Widgets.Checkbox("Enable", _config.TrimDeadspace, v => _config.TrimDeadspace = v, () => dirty = true);
 
-            int margin = _config.TrimMarginPx;
             ImGui.SetNextItemWidth(160);
-            if (ImGui.InputInt("Margin (px)", ref margin))
-            {
-                _config.TrimMarginPx = Math.Max(0, margin);
-                dirty = true;
-            }
+            Widgets.InputInt("Margin (px)", _config.TrimMarginPx, v => _config.TrimMarginPx = Math.Max(0, v), () => dirty = true);
             ImGui.SameLine();
-            ImGui.TextColored(Theme.TextDim, "transparent padding kept around the content");
+            Widgets.DimText("transparent padding kept around the content");
 
-            if (trim)
+            if (_config.TrimDeadspace)
                 ImGui.TextColored(Theme.Gold, "Note: trimmed animation export buffers every frame " +
                     "to a temp file on disk first; transiently uses ~width×height×4×frames of space, " +
                     "times the supersample factor squared (several GB at 4K, tens of GB with high supersample).");
@@ -57,14 +47,10 @@ namespace PlayerViewer.UI
                 "lossless (largest). Lower = lossy: smaller and faster to encode, with some quality loss.");
             ImGui.Spacing();
 
-            int quality = _config.WebpQuality;
             ImGui.SetNextItemWidth(-1);
-            string qLabel = quality >= 100 ? "Lossless" : "Lossy %d";
-            if (ImGui.SliderInt("##webpq", ref quality, 0, 100, qLabel))
-            {
-                _config.WebpQuality = Math.Clamp(quality, 0, 100);
-                dirty = true;
-            }
+            string qLabel = _config.WebpQuality >= 100 ? "Lossless" : "Lossy %d";
+            Widgets.SliderInt("##webpq", _config.WebpQuality, 0, 100,
+                v => _config.WebpQuality = Math.Clamp(v, 0, 100), () => dirty = true, qLabel);
 
             if (ImGui.Button("Lossless")) { _config.WebpQuality = 100; dirty = true; }
             ImGui.SameLine();
@@ -78,28 +64,35 @@ namespace PlayerViewer.UI
                 "right; a small or loosely-framed subject still exports sharp.");
             ImGui.Spacing();
 
-            int ss = _config.ExportSupersample;
             ImGui.SetNextItemWidth(-1);
-            if (ImGui.SliderInt("##supersample", ref ss, 1, 8, "%dx"))
-            {
-                _config.ExportSupersample = Math.Clamp(ss, 1, 8);
-                dirty = true;
-            }
+            Widgets.SliderInt("##supersample", _config.ExportSupersample, 1, 8,
+                v => _config.ExportSupersample = Math.Clamp(v, 1, 8), () => dirty = true, "%dx");
 
-            ss = _config.ExportSupersample;
-            ImGui.TextColored(Theme.TextDim,
+            int ss = _config.ExportSupersample;
+            Widgets.DimText(
                 $"A 1080p export renders {1920 * ss}x{1080 * ss} internally ({ss * ss}x the pixels).");
             if (ss >= 8)
-                ImGui.TextColored(new Vector4(0.95f, 0.35f, 0.3f, 1),
-                    "8x is extreme: may exhaust GPU memory at 4K");
+                Widgets.ErrorText("8x is extreme: may exhaust GPU memory at 4K");
             else if (ss > 4)
                 ImGui.TextColored(Theme.Gold,
                     "High supersample: large GPU memory & temp-disk use (grows with the square of the factor)");
 
+            Widgets.SectionHeader("Physics warm-up");
+            ImGui.TextWrapped("Plays the animation (/ first animation in the sequence) through " +
+                "this many extra times before recording starts without capturing. Physics reset" +
+                "whenever an animation loads, so frame 0 has a twitch each time the exported " +
+                "WebP/WebM loops. A warm-up lets the sim settle first.");
+            ImGui.Spacing();
+
+            ImGui.SetNextItemWidth(-1);
+            string plLabel = _config.PrerollLoops <= 0 ? "Off" : "%d loops";
+            Widgets.SliderInt("##preroll", _config.PrerollLoops, 0, PrerollMaxLoops,
+                v => _config.PrerollLoops = Math.Clamp(v, 0, PrerollMaxLoops), () => dirty = true, plLabel);
+
             Widgets.SectionHeader("Data folder");
             ImGui.TextWrapped("settings.json lives here. Drop an ffmpeg binary here to use it " +
                 "instead of one on PATH.");
-            ImGui.TextColored(Theme.TextDim, AppPaths.DataDir);
+            Widgets.DimText(AppPaths.DataDir);
             if (ImGui.Button("Open data folder"))
                 AppPaths.OpenDataDir();
 

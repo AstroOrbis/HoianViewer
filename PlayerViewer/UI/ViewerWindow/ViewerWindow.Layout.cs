@@ -93,7 +93,7 @@ namespace PlayerViewer.UI
             if (_romfs != null)
             {
                 ImGui.SameLine(ImGui.GetWindowWidth() - 320);
-                ImGui.TextColored(Theme.TextDim, TruncatePath(_config.RomfsPath, 42));
+                Widgets.DimText(TruncatePath(_config.RomfsPath, 42));
             }
 
             ImGui.EndMenuBar();
@@ -130,9 +130,9 @@ namespace PlayerViewer.UI
             ImGui.Spacing();
             bool valid = Romfs.IsValidRoot(_romfsInput);
             if (!valid && !string.IsNullOrEmpty(_romfsInput))
-                ImGui.TextColored(new Vector4(0.9f, 0.35f, 0.3f, 1), "Not a valid romfs (needs Model/ + RSDB/)");
+                Widgets.ErrorText("Not a valid romfs (needs Model/ + RSDB/)");
             if (_romfsError != null)
-                ImGui.TextColored(new Vector4(0.9f, 0.35f, 0.3f, 1), _romfsError);
+                Widgets.ErrorText(_romfsError);
 
             ImGui.Spacing();
             ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1), "Side Order DLC romfs (optional)");

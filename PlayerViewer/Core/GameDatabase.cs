@@ -32,6 +32,7 @@ namespace PlayerViewer.Core
         public string CustomPath;       //Source path for custom entries
         public string WeaponType = "";  //Weapon rows: Versus/Coop/Mission/...
         public string ActorName = "";   //Actor pack name (weapons: from GameActor/SpecActor)
+        public string Genre = "";       //Gear rows: Genre0 (Head_Cap, Shoes_Boots, ...) for foldering
 
         /// <summary>Display name for UI lists.</summary>
         public string DisplayName
@@ -157,6 +158,7 @@ namespace PlayerViewer.Core
                         Label = Byml.GetString(row, "Label"),
                         Variation = v,
                         VariationCount = varNum + 1,
+                        Genre = Byml.GetString(row, "Genre0"),
                     });
                 }
             }

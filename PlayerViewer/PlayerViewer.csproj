@@ -10,6 +10,17 @@
     <CssRoot>..\Cafe-Shader-Studio</CssRoot>
   </PropertyGroup>
 
+  <!-- Opt-in automatic Tracy profiling: build with `-p:Tracy=true`. Compiles the runtime shim
+       into this assembly (and pulls Tracy-CSharp so TracyClient.so ships), then a post-build step
+       runs the Mono.Cecil weaver to wrap every eligible method in the output assemblies in a Tracy zone.-->
+  <ItemGroup Condition="'$(Tracy)' == 'true'">
+    <PackageReference Include="Tracy-CSharp" Version="0.13.1" />
+    <Compile Include="..\tools\TracyWeave.cs" />
+  </ItemGroup>
+  <Target Name="TracyWeave" AfterTargets="Build" Condition="'$(Tracy)' == 'true'">
+    <Exec Command="dotnet run --file &quot;$(MSBuildThisFileDirectory)..\tools\TracyWeaver.cs&quot; -- --dir &quot;$(TargetDir)&quot; --frame-mark PlayerViewer.UI.ViewerWindow::OnRenderFrame PlayerViewer.dll GLFrameworkEngine.dll" />
+  </Target>
+
   <ItemGroup>
     <Reference Include="BfresLibrary">
       <HintPath>$(CssRoot)\BfresEditor\Lib\BfresLibrary.dll</HintPath>
@@ -17,9 +28,7 @@
     <Reference Include="ImGui.NET">
       <HintPath>$(CssRoot)\CafeShaderStudio\Lib\ImGui.NET.dll</HintPath>
     </Reference>
-    <Reference Include="OpenTK">
-      <HintPath>$(CssRoot)\CafeShaderStudio\Lib\OpenTK.dll</HintPath>
-    </Reference>
+    <PackageReference Include="OpenTK" Version="3.1.0" />
     <Reference Include="Syroot.Maths">
       <HintPath>$(CssRoot)\CafeShaderStudio\Lib\Syroot.Maths.dll</HintPath>
     </Reference>
@@ -35,6 +44,8 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+    <!-- Transitive runtime dep of the vendored Toolbox.Core.dll (was shipped as a loose Lib DLL). -->
+    <PackageReference Include="SharpYaml" Version="1.6.5" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
