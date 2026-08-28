@@ -1,0 +1,92 @@
+[
+  {
+    "pname": "CSharpier",
+    "version": "1.3.0",
+    "hash": "sha256-hwieEoQTcATyKZIZ7CQSWANPBv+pEShg6cDXU5EIexU="
+  },
+  {
+    "pname": "Microsoft.CSharp",
+    "version": "4.7.0",
+    "hash": "sha256-Enknv2RsFF68lEPdrf5M+BpV1kHoLTVRApKUwuk/pj0="
+  },
+  {
+    "pname": "Microsoft.DotNet.PlatformAbstractions",
+    "version": "3.1.6",
+    "hash": "sha256-RfM2qXiqdiamPkXr4IDkNc0IZSF9iTZv4uou/E7zNS0="
+  },
+  {
+    "pname": "Microsoft.Extensions.DependencyModel",
+    "version": "8.0.0",
+    "hash": "sha256-qkCdwemqdZY/yIW5Xmh7Exv74XuE39T8aHGHCofoVgo="
+  },
+  {
+    "pname": "Microsoft.Win32.SystemEvents",
+    "version": "8.0.0",
+    "hash": "sha256-UcxurEamYD+Bua0PbPNMYAZaRulMrov8CfbJGIgTaRQ="
+  },
+  {
+    "pname": "Newtonsoft.Json",
+    "version": "13.0.1",
+    "hash": "sha256-K2tSVW4n4beRPzPu3rlVaBEMdGvWSv/3Q1fxaDh4Mjo="
+  },
+  {
+    "pname": "OpenTK",
+    "version": "3.1.0",
+    "hash": "sha256-9ybHbgKDSW4ymMnJiOt9Z7cg9vdIUblCLDDSSm4gBWI="
+  },
+  {
+    "pname": "SharpYaml",
+    "version": "1.6.5",
+    "hash": "sha256-2UQS68vnvFUgTwxl56Zsjd62aIv2KCsmPwoN+81mkc4="
+  },
+  {
+    "pname": "Silk.NET.Core",
+    "version": "2.22.0",
+    "hash": "sha256-1aBiBwifLel9aaGI97gxbvID/XKbFm1dpVv2zm0NSEc="
+  },
+  {
+    "pname": "Silk.NET.Maths",
+    "version": "2.22.0",
+    "hash": "sha256-wBydHf4R69A3dm8SnD82zjBd5QgwXbmipRqXtk+AjpE="
+  },
+  {
+    "pname": "Silk.NET.OpenGL",
+    "version": "2.22.0",
+    "hash": "sha256-1XWABfBzsSg1nJzbDJ/FH140WLzjpuNTxDHNZfV85xo="
+  },
+  {
+    "pname": "SixLabors.ImageSharp",
+    "version": "3.1.12",
+    "hash": "sha256-FR8v74w4P/1AZdW5ARW0y8zgDqLtvhxQmL1CKv68xR0="
+  },
+  {
+    "pname": "System.Drawing.Common",
+    "version": "8.0.0",
+    "hash": "sha256-xPNnKUTcZiqnTtRgI2YazMoZgay/prwKrJjbZUbVmcg="
+  },
+  {
+    "pname": "System.Dynamic.Runtime",
+    "version": "4.3.0",
+    "hash": "sha256-k75gjOYimIQtLBD5NDzwwi3ZMUBPRW3jmc3evDMMJbU="
+  },
+  {
+    "pname": "System.Numerics.Vectors",
+    "version": "4.5.0",
+    "hash": "sha256-qdSTIFgf2htPS+YhLGjAGiLN8igCYJnCCo6r78+Q+c8="
+  },
+  {
+    "pname": "System.Resources.Extensions",
+    "version": "6.0.0-preview.1.21102.12",
+    "hash": "sha256-XF1SAnfk1sOfjuVZQ85YoBPPw75KFmhU78zm6i9Akno="
+  },
+  {
+    "pname": "System.Runtime.CompilerServices.Unsafe",
+    "version": "6.0.0",
+    "hash": "sha256-bEG1PnDp7uKYz/OgLOWs3RWwQSVYm+AnPwVmAmcgp2I="
+  },
+  {
+    "pname": "ZstdSharp.Port",
+    "version": "0.8.8",
+    "hash": "sha256-9nlxkt7r9FNfBgHCJz51DaDAIGLjCj5KPEARuawiQDo="
+  }
+]

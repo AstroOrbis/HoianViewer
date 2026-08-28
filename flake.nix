@@ -19,29 +19,102 @@
         };
 
       sdkFor = pkgs: pkgs.dotnetCorePackages.sdk_10_0;
+
+      runtimeLibsFor =
+        pkgs: with pkgs; [
+          libglvnd
+          libGL
+          libx11
+          libxi
+          libxrandr
+          libxcursor
+          libxext
+          libxinerama
+          libxkbcommon
+          icu
+          fontconfig
+          freetype
+          zlib
+          openssl
+          stdenv.cc.cc.lib
+        ];
+
+      packageFor =
+        pkgs:
+        let
+          dotnet = sdkFor pkgs;
+        in
+        pkgs.buildDotnetModule {
+          pname = "hoianviewer";
+          version = "0.1.0";
+
+          src = ./.;
+
+          projectFile = "PlayerViewer/PlayerViewer.csproj";
+          nugetDeps = ./deps.json;
+
+          dotnet-sdk = dotnet;
+          dotnet-runtime = pkgs.dotnetCorePackages.runtime_10_0;
+
+          executables = [ "PlayerViewer" ];
+
+          runtimeDeps = runtimeLibsFor pkgs;
+
+          makeWrapperArgs = [
+            # ffmpeg for export, zenity for tinyfiledialogs' file pickers
+            "--prefix"
+            "PATH"
+            ":"
+            (pkgs.lib.makeBinPath [
+              pkgs.ffmpeg
+              pkgs.zenity
+            ])
+          ]
+          ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            "--prefix"
+            "LD_LIBRARY_PATH"
+            ":"
+            "/run/opengl-driver/lib"
+          ];
+
+          meta = {
+            description = "Standalone Splatoon 3 player/model viewer";
+            homepage = "https://github.com/nvnprogram/HoianViewer";
+            mainProgram = "PlayerViewer";
+            platforms = dotnet.meta.platforms;
+          };
+        };
     in
     {
+      packages = forAllSystems (pkgs: {
+        default = packageFor pkgs;
+        hoianviewer = packageFor pkgs;
+      });
+
+      apps = forAllSystems (
+        pkgs:
+        let
+          pkg = packageFor pkgs;
+        in
+        {
+          default = {
+            type = "app";
+            program = "${pkg}/bin/PlayerViewer";
+          };
+
+          # nix run .#fetch-deps -- ./deps.json
+          fetch-deps = {
+            type = "app";
+            program = "${pkg.fetch-deps}";
+          };
+        }
+      );
+
       devShells = forAllSystems (
         pkgs:
         let
           dotnet = sdkFor pkgs;
-          runtimeLibs = with pkgs; [
-            libglvnd
-            libGL
-            libx11
-            libxi
-            libxrandr
-            libxcursor
-            libxext
-            libxinerama
-            libxkbcommon
-            icu
-            fontconfig
-            freetype
-            zlib
-            openssl
-            stdenv.cc.cc.lib
-          ];
+          runtimeLibs = runtimeLibsFor pkgs;
         in
         {
           default = pkgs.mkShell {

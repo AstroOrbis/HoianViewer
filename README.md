@@ -4,14 +4,20 @@ Standalone(as in, a separate exe, not part of the game) Splatoon 3 player viewer
 
 ## Building
 
-Requires .NET 6 SDK.
+Requires .NET 10 SDK.
 
 ```
 cd PlayerViewer
 dotnet build -c Release
 ```
 
-Which builds to  `PlayerViewer/bin/Release/net6.0/PlayerViewer.exe`.
+Which builds to  `PlayerViewer/bin/Release/net10.0/PlayerViewer.exe`.
+
+NuGet dependencies are pinned in `deps.json` for nix, so after changing a `PackageReference`:
+
+```
+nix run .#fetch-deps -- ./deps.json
+```
 
 ## Setup
 
