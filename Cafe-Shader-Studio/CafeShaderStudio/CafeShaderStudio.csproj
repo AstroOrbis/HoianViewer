@@ -257,7 +257,6 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Lib\ImGui.NET.dll" />
-    <Content Include="Lib\ImGui.NET.pdb" />
     <Content Include="tinyfiledialogs.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
