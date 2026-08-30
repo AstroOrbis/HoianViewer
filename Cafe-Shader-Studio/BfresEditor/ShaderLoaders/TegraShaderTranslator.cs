@@ -1,4 +1,4 @@
-﻿using Ryujinx.Graphics.Shader;
+using Ryujinx.Graphics.Shader;
 using Ryujinx.Graphics.Shader.Translation;
 using System;
 using System.IO;

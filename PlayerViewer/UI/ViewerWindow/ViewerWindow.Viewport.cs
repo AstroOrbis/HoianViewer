@@ -34,18 +34,24 @@ namespace PlayerViewer.UI
                 _pipeline.Render(ActiveScene);
             }
 
+            float fit = size.Y / _pipeline.Height;
+            var imgSize = new Vector2(_pipeline.Width * fit, size.Y);
+            var uv0 = new Vector2(0, 1);
+            var uv1 = new Vector2(1, 0);
+            if (imgSize.X > size.X)
+            {
+                float visible = size.X / imgSize.X;
+                uv0.X = (1 - visible) / 2;
+                uv1.X = uv0.X + visible;
+                imgSize.X = size.X;
+            }
+            else if (imgSize.X < size.X)
+            {
+                ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (size.X - imgSize.X) / 2);
+            }
+
             var pos = ImGui.GetCursorScreenPos();
-            //Fit the render texture into the region, preserving aspect. Normally its already
-            //region-sized (1:1); during a supersampled export its larger, so scale it down
-            //instead of overflowing the region so it doesn't "zoom"
-            float fit = Math.Min(size.X / _pipeline.Width, size.Y / _pipeline.Height);
-            var imgSize = new Vector2(_pipeline.Width * fit, _pipeline.Height * fit);
-            ImGui.Image(
-                (IntPtr)_pipeline.ViewportTextureId,
-                imgSize,
-                new Vector2(0, 1),
-                new Vector2(1, 0)
-            );
+            ImGui.Image((IntPtr)_pipeline.ViewportTextureId, imgSize, uv0, uv1);
 
             _viewportHovered = ImGui.IsItemHovered();
             //Freeze the camera during a full-animation export so every frame shares
