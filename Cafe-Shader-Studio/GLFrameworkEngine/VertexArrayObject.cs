@@ -78,6 +78,10 @@ namespace GLFrameworkEngine
         /// <param name="control"></param>
         public void Use()
         {
+            //Binding a name that has not been generated is invalid and leaves the
+            //driver's vertex array namespace in a bad state.
+            Initialize();
+
             GL.BindVertexArray(vaoID);
 
             if (indexBuffer.HasValue)
