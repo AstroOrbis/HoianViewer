@@ -1,3 +1,4 @@
+using ShaderLibrary.IO;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -7,12 +8,10 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
-using ShaderLibrary.IO;
 
 namespace ShaderLibrary
 {
-    public class ResDict<T> : Dictionary<string, T>, IResData
-        where T : IResData, new()
+    public class ResDict<T> :  Dictionary<string, T>, IResData where T : IResData, new()
     {
         internal List<Node> _nodes = new List<Node>();
 
@@ -84,15 +83,13 @@ namespace ShaderLibrary
             int i = 0;
             for (; numNodes >= 0; numNodes--)
             {
-                _nodes.Add(
-                    new Node()
-                    {
-                        Reference = reader.ReadUInt32(),
-                        IdxLeft = reader.ReadUInt16(),
-                        IdxRight = reader.ReadUInt16(),
-                        Key = reader.LoadString(reader.ReadUInt64()),
-                    }
-                );
+                _nodes.Add(new Node()
+                {
+                    Reference = reader.ReadUInt32(),
+                    IdxLeft = reader.ReadUInt16(),
+                    IdxRight = reader.ReadUInt16(),
+                    Key = reader.LoadString(reader.ReadUInt64()),
+                });
                 i++;
             }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using Newtonsoft.Json;
 
@@ -26,8 +27,18 @@ namespace PlayerViewer.Core
         {
             Mode = System.Math.Clamp(Mode, 0, 2);
             ScaleMode = System.Math.Clamp(ScaleMode, 0, 2);
-            if (Color == null || Color.Length < 3)
-                Color = new[] { 0f, 1f, 0f };
+            var color = new[] { 0f, 1f, 0f };
+            if (Color != null)
+                for (int i = 0; i < 3 && i < Color.Length; i++)
+                    if (float.IsFinite(Color[i]))
+                        color[i] = System.Math.Clamp(Color[i], 0f, 1f);
+            Color = color;
+            if (!float.IsFinite(Zoom) || Zoom <= 0f)
+                Zoom = 1f;
+            if (!float.IsFinite(OffsetX))
+                OffsetX = 0f;
+            if (!float.IsFinite(OffsetY))
+                OffsetY = 0f;
             ImagePath ??= "";
             TileX = System.Math.Max(1, TileX);
             TileY = System.Math.Max(1, TileY);
@@ -64,6 +75,25 @@ namespace PlayerViewer.Core
 
         //Composited export/viewport background, saved and loaded with the preset.
         public BackgroundConfig Background = new();
+
+        public void Normalize()
+        {
+            Background ??= new BackgroundConfig();
+            Background.Normalize();
+            CustomAlpha = NormalizeTeamColor(CustomAlpha, 0.925f, 0.243f, 0.549f);
+            CustomBravo = NormalizeTeamColor(CustomBravo, 0.196f, 0.855f, 0.302f);
+            CustomCharlie = NormalizeTeamColor(CustomCharlie, 0.980f, 0.769f, 0.196f);
+        }
+
+        static float[] NormalizeTeamColor(float[] value, float r, float g, float b)
+        {
+            var color = new[] { r, g, b };
+            if (value != null)
+                for (int i = 0; i < 3 && i < value.Length; i++)
+                    if (float.IsFinite(value[i]))
+                        color[i] = System.Math.Clamp(value[i], 0f, 1f);
+            return color;
+        }
     }
 
     /// <summary>
@@ -110,39 +140,106 @@ namespace PlayerViewer.Core
 
         static string FilePath => Path.Combine(AppPaths.DataDir, "settings.json");
 
+        //Pre-AppData location, next to the exe
+        static string LegacyFilePath =>
+            Path.Combine(AppContext.BaseDirectory, "playerviewer_config.json");
+
+        //Writes are coalesced: Save() only marks the config dirty, and the actual file write
+        //happens at most this often. Slider callbacks call Save() every frame while dragging.
+        static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
+
+        bool _dirty;
+        readonly Stopwatch _sinceWrite = Stopwatch.StartNew();
+
         public static AppConfig Load()
+        {
+            var config = ReadFrom(FilePath);
+            bool migrated = false;
+            if (config == null && !File.Exists(FilePath))
+            {
+                config = ReadFrom(LegacyFilePath);
+                migrated = config != null;
+            }
+            config ??= new AppConfig();
+            config.Normalize();
+            if (migrated)
+            {
+                config.WriteToDisk();
+                Console.WriteLine($"[Config] Migrated settings from {LegacyFilePath}");
+            }
+            return config;
+        }
+
+        static AppConfig ReadFrom(string path)
         {
             try
             {
-                if (File.Exists(FilePath))
-                {
-                    var config =
-                        JsonConvert.DeserializeObject<AppConfig>(File.ReadAllText(FilePath))
-                        ?? new AppConfig();
-                    //Guard against corrupt/zero sizes (e.g. saved while minimized).
-                    if (config.WindowWidth < 200)
-                        config.WindowWidth = 1600;
-                    if (config.WindowHeight < 200)
-                        config.WindowHeight = 900;
-                    return config;
-                }
+                if (File.Exists(path))
+                    return JsonConvert.DeserializeObject<AppConfig>(File.ReadAllText(path));
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Config] Failed to load: {ex.Message}");
+                Console.WriteLine($"[Config] Failed to load {path}: {ex.Message}");
             }
-            return new AppConfig();
+            return null;
         }
 
-        public void Save()
+        //Clamps loaded values and replaces anything a hand-edited file left null.
+        public void Normalize()
         {
+            //Guard against corrupt/zero sizes (e.g. saved while minimized).
+            if (WindowWidth < 200)
+                WindowWidth = 1600;
+            if (WindowHeight < 200)
+                WindowHeight = 900;
+            //Multiplies the render target, so a hand-edited value has to stay in range.
+            ExportSupersample = System.Math.Clamp(ExportSupersample, 1, 8);
+            Player ??= new PlayerConfig();
+            Player.Normalize();
+        }
+
+        /// <summary>
+        /// Marks the config as needing a write. Cheap enough to call from a per-frame ImGui
+        /// change callback; <see cref="FlushPending"/> does the write.
+        /// </summary>
+        public void Save() => _dirty = true;
+
+        /// <summary>Writes a pending change once the coalescing interval has elapsed.</summary>
+        public void FlushPending()
+        {
+            if (_dirty && _sinceWrite.Elapsed >= FlushInterval)
+                Flush();
+        }
+
+        /// <summary>Writes a pending change now. Called on shutdown so nothing is lost.</summary>
+        public void Flush()
+        {
+            if (!_dirty)
+                return;
+            _dirty = false;
+            _sinceWrite.Restart();
+            WriteToDisk();
+        }
+
+        void WriteToDisk()
+        {
+            string temp = FilePath + ".tmp";
             try
             {
-                File.WriteAllText(FilePath, JsonConvert.SerializeObject(this, Formatting.Indented));
+                File.WriteAllText(temp, JsonConvert.SerializeObject(this, Formatting.Indented));
+                if (File.Exists(FilePath))
+                    File.Replace(temp, FilePath, null);
+                else
+                    File.Move(temp, FilePath);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[Config] Failed to save: {ex.Message}");
+                try
+                {
+                    File.Delete(temp);
+                }
+                catch { }
             }
         }
     }

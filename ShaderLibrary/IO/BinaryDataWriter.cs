@@ -1,10 +1,10 @@
-﻿using System;
+﻿using ShaderLibrary.Common;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
-using ShaderLibrary.Common;
 
 namespace ShaderLibrary.IO
 {
@@ -24,8 +24,7 @@ namespace ShaderLibrary.IO
         public bool IsBigEndian = false;
         public bool IsWiiU = false;
 
-        public BinaryDataWriter(Stream input, bool bigEndian = false)
-            : base(input, Encoding.UTF8, true)
+        public BinaryDataWriter(Stream input, bool bigEndian = false) : base(input, Encoding.UTF8, true)
         {
             IsBigEndian = bigEndian;
             IsWiiU = IsBigEndian;
@@ -104,11 +103,9 @@ namespace ShaderLibrary.IO
             this.Write(Encoding.ASCII.GetBytes(magic));
         }
 
-        internal void WriteDictionary<T>(ResDict<T> dict, long offset_pos)
-            where T : IResData, new()
+        internal void WriteDictionary<T>(ResDict<T> dict, long offset_pos) where T : IResData, new()
         {
-            if (dict.Count == 0)
-                return;
+            if (dict.Count == 0) return;
 
             this.AlignBytes(8);
             this.WriteOffset(offset_pos);
@@ -130,23 +127,20 @@ namespace ShaderLibrary.IO
             {
                 var target_relative = target - offset;
                 //Seek to where to write the offset itself and use relative position
-                using (this.BaseStream.TemporarySeek(offset, SeekOrigin.Begin))
-                {
+                using (this.BaseStream.TemporarySeek(offset, SeekOrigin.Begin)) {
                     Write(((uint)target_relative));
                 }
             }
             else
             {
-                //Seek to where to write the offset itself
-                using (this.BaseStream.TemporarySeek((uint)offset, SeekOrigin.Begin))
-                {
+                //Seek to where to write the offset itself 
+                using (this.BaseStream.TemporarySeek((uint)offset, SeekOrigin.Begin)) {
                     Write(((uint)target));
                 }
             }
         }
 
-        private void WriteDictionary<T>(ResDict<T> resDict)
-            where T : IResData, new()
+        private void WriteDictionary<T>(ResDict<T> resDict) where T : IResData, new()
         {
             resDict.GenerateTree();
             var nodes = resDict.GetNodes();
@@ -200,9 +194,7 @@ namespace ShaderLibrary.IO
                 {
                     if (i < _savedHeaderBlockPositions.Count - 1)
                     {
-                        uint blockSize = (uint)(
-                            _savedHeaderBlockPositions[i + 1] - _savedHeaderBlockPositions[i]
-                        );
+                        uint blockSize = (uint)(_savedHeaderBlockPositions[i + 1] - _savedHeaderBlockPositions[i]);
                         WriteHeaderBlock(blockSize, blockSize);
                     }
                 }
@@ -224,10 +216,7 @@ namespace ShaderLibrary.IO
         public void AlignBytes(int align, byte pad_val = 0)
         {
             var startPos = this.BaseStream.Position;
-            long position = this.Seek(
-                (int)(-this.BaseStream.Position % align + align) % align,
-                SeekOrigin.Current
-            );
+            long position = this.Seek((int)(-this.BaseStream.Position % align + align) % align, SeekOrigin.Current);
 
             this.Seek((int)startPos, System.IO.SeekOrigin.Begin);
             while (this.BaseStream.Position != position)

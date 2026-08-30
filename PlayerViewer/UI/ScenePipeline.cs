@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using GLFrameworkEngine;
 using OpenTK;
 using OpenTK.Graphics.OpenGL;
@@ -173,6 +174,42 @@ namespace PlayerViewer.UI
             depth = new DepthTexture(width, height, PixelInternalFormat.DepthComponent24);
             fbo.AddAttachment(FramebufferAttachment.DepthAttachment, depth);
             return fbo;
+        }
+
+        static void DisposeFramebuffer(Framebuffer fbo)
+        {
+            if (fbo == null)
+                return;
+            foreach (var attachment in fbo.Attachments)
+                attachment.Dispose();
+            fbo.Dispoe();
+        }
+
+        static int _maxTargetSize;
+
+        /// <summary>Largest render target edge this GL context can actually allocate.</summary>
+        public static int MaxTargetSize
+        {
+            get
+            {
+                if (_maxTargetSize == 0)
+                {
+                    GL.GetInteger(GetPName.MaxTextureSize, out int tex);
+                    GL.GetInteger(GetPName.MaxRenderbufferSize, out int rbo);
+                    _maxTargetSize = Math.Max(1, Math.Min(tex, rbo));
+                }
+                return _maxTargetSize;
+            }
+        }
+
+        /// <summary>
+        /// Largest factor at or below <paramref name="factor"/> whose supersampled render
+        /// target for a width x height capture still fits <see cref="MaxTargetSize"/>.
+        /// </summary>
+        public static int ClampSupersample(int factor, int width, int height)
+        {
+            int edge = Math.Max(Math.Max(width, height), 1);
+            return Math.Clamp(factor, 1, Math.Max(MaxTargetSize / edge, 1));
         }
 
         /// <summary>
@@ -491,7 +528,7 @@ namespace PlayerViewer.UI
             GL.Viewport(0, 0, width, height);
             GL.ClearColor(0, 0, 0, 0);
             GL.Clear(ClearBufferMask.ColorBufferBit);
-            _quad.Draw(Context, (GLTexture)screen.Attachments[0], keepAlpha);
+            _quad.Draw(Context, (GLTexture)screen.Attachments[0], keepAlpha, scale);
             Trace("after quad", width, height);
             final.Unbind();
 
@@ -505,7 +542,8 @@ namespace PlayerViewer.UI
         /// <summary>
         /// Renders a one-off capture at the given resolution. transparent=true clears
         /// alpha 0 and keeps coverage in the output (background rgb still applies to
-        /// semi-transparent edges).
+        /// semi-transparent edges). The supersample factor is clamped to what the GL
+        /// context can allocate; returns null if the buffers still come out incomplete.
         /// </summary>
         public Image<Rgba32> Capture(
             IViewScene scene,
@@ -516,7 +554,11 @@ namespace PlayerViewer.UI
             int scaleOverride = 0
         )
         {
-            int scale = scaleOverride > 0 ? scaleOverride : ScaleFor(width, height);
+            int scale = ClampSupersample(
+                scaleOverride > 0 ? scaleOverride : ScaleFor(width, height),
+                width,
+                height
+            );
             var screen = CreateScreenBuffer(width * scale, height * scale, out var screenDepth);
             var final = new Framebuffer(
                 FramebufferTarget.Framebuffer,
@@ -527,6 +569,17 @@ namespace PlayerViewer.UI
             );
             try
             {
+                if (
+                    screen.GetStatus() != FramebufferErrorCode.FramebufferComplete
+                    || final.GetStatus() != FramebufferErrorCode.FramebufferComplete
+                )
+                {
+                    Console.WriteLine(
+                        $"[Pipeline] Capture buffers incomplete at {width}x{height} x{scale}"
+                    );
+                    return null;
+                }
+
                 RenderInternal(
                     scene,
                     screen,
@@ -543,60 +596,75 @@ namespace PlayerViewer.UI
                     transparent,
                     screenDepth
                 );
-                final.Bind();
-                byte[] pixels = new byte[width * height * 4];
-                GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
-                GL.ReadPixels(
-                    0,
-                    0,
-                    width,
-                    height,
-                    PixelFormat.Rgba,
-                    PixelType.UnsignedByte,
-                    pixels
-                );
-                final.Unbind();
-                return ToImage(pixels, width, height, transparent);
+
+                int size = width * height * 4;
+                var pixels = System.Buffers.ArrayPool<byte>.Shared.Rent(size);
+                try
+                {
+                    final.Bind();
+                    GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
+                    GL.ReadPixels(
+                        0,
+                        0,
+                        width,
+                        height,
+                        PixelFormat.Rgba,
+                        PixelType.UnsignedByte,
+                        pixels
+                    );
+                    final.Unbind();
+                    return ToImage(pixels, size, width, height, transparent);
+                }
+                finally
+                {
+                    System.Buffers.ArrayPool<byte>.Shared.Return(pixels);
+                }
             }
             finally
             {
-                screen.Dispoe();
-                screenDepth.Dispose();
-                final.Dispoe();
+                DisposeFramebuffer(screen);
+                DisposeFramebuffer(final);
                 Camera.UpdateMatrices();
             }
         }
 
-        //Wraps bottom-up RGBA8 bytes (OpenGL row order) into a top-down ImageSharp image.
-        //When not transparent the alpha channel is forced opaque.
-        static Image<Rgba32> ToImage(byte[] rgba, int width, int height, bool transparent)
+        //Wraps the first `length` bottom-up RGBA8 bytes (OpenGL row order) into a top-down
+        //ImageSharp image. When not transparent the alpha channel is forced opaque.
+        static Image<Rgba32> ToImage(
+            byte[] rgba,
+            int length,
+            int width,
+            int height,
+            bool transparent
+        )
         {
             if (!transparent)
-                for (int i = 3; i < rgba.Length; i += 4)
+                for (int i = 3; i < length; i += 4)
                     rgba[i] = 255;
-            var image = Image.LoadPixelData<Rgba32>(rgba, width, height);
+            var image = Image.LoadPixelData<Rgba32>(
+                new ReadOnlySpan<byte>(rgba, 0, length),
+                width,
+                height
+            );
             image.Mutate(x => x.Flip(FlipMode.Vertical));
             return image;
         }
 
         /// <summary>
-        /// Renders one frame at the current viewport size into the display buffers and
-        /// returns raw bottom-up RGBA8 bytes (OpenGL row order, ffmpeg-ready).
-        /// transparent=true keeps the real alpha channel; otherwise the frame is
-        /// composited over <paramref name="background"/> opaquely. The buffer is rented
-        /// from <see cref="System.Buffers.ArrayPool{T}"/>; ownership transfers to the caller.
-        /// Synchronous, so every frame deterministically maps 1:1.
+        /// Renders one frame at the current viewport size into the display buffers and fills
+        /// <paramref name="dest"/> with raw bottom-up RGBA8 bytes (OpenGL row order,
+        /// ffmpeg-ready). transparent=true keeps the real alpha channel; otherwise the frame is
+        /// composited over <paramref name="background"/> opaquely. The caller owns the buffer and
+        /// it must hold at least Width * Height * 4 bytes, which lets an export reuse a fixed set
+        /// of them. Synchronous, so every frame deterministically maps 1:1.
         /// </summary>
-        public byte[] CaptureFrameBytes(
+        public void CaptureFrameBytes(
             IViewScene scene,
             System.Numerics.Vector3 background,
             bool transparent,
-            out int width,
-            out int height
+            byte[] dest
         )
         {
-            width = Width;
-            height = Height;
             RenderInternal(
                 scene,
                 _screen,
@@ -614,13 +682,10 @@ namespace PlayerViewer.UI
                 _screenDepth
             );
 
-            int size = Width * Height * 4;
-            var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(size);
             _final.Bind();
             GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
-            GL.ReadPixels(0, 0, Width, Height, PixelFormat.Rgba, PixelType.UnsignedByte, buf);
+            GL.ReadPixels(0, 0, Width, Height, PixelFormat.Rgba, PixelType.UnsignedByte, dest);
             _final.Unbind();
-            return buf;
         }
 
         /// <summary>
@@ -683,8 +748,10 @@ namespace PlayerViewer.UI
                 GL.DeleteTexture(_bgTex);
                 _bgTex = 0;
             }
-            _screen?.Dispoe();
-            _final?.Dispoe();
+            DisposeFramebuffer(_screen);
+            DisposeFramebuffer(_final);
+            _screen = null;
+            _final = null;
             _selfShadow?.Dispose();
         }
     }
@@ -760,7 +827,8 @@ namespace PlayerViewer.UI
     }
 
     /// <summary>
-    /// Fullscreen quad running the FinalHDR gamma shader (linear -> sRGB), with
+    /// Fullscreen quad that resolves the supersampled linear buffer into the display
+    /// buffer: an NxN box filter over the source texels, then linear -> sRGB, with
     /// optional alpha passthrough for transparent captures.
     /// </summary>
     class FinalQuad
@@ -768,13 +836,26 @@ namespace PlayerViewer.UI
         ShaderProgram _shader;
         VertexBufferObject _vao;
 
+        //Embedded rather than copied next to the exe: the single file bundler has already been
+        //caught swallowing loose runtime files, and these are code, not user editable content.
+        static string LoadShader(string name)
+        {
+            string resource = $"PlayerViewer.UI.Shaders.{name}";
+            using var stream =
+                typeof(FinalQuad).Assembly.GetManifestResourceStream(resource)
+                ?? throw new InvalidOperationException($"missing embedded shader {resource}");
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+
         void Init()
         {
             if (_shader != null)
                 return;
-            string frag = System.IO.File.ReadAllText("Shaders/FinalHDR.frag");
-            string vert = System.IO.File.ReadAllText("Shaders/FinalHDR.vert");
-            _shader = new ShaderProgram(new FragmentShader(frag), new VertexShader(vert));
+            _shader = new ShaderProgram(
+                new FragmentShader(LoadShader("Resolve.frag")),
+                new VertexShader(LoadShader("Resolve.vert"))
+            );
 
             int buffer = GL.GenBuffer();
             _vao = new VertexBufferObject(buffer);
@@ -791,7 +872,7 @@ namespace PlayerViewer.UI
             );
         }
 
-        public void Draw(GLContext context, GLTexture color, bool keepAlpha)
+        public void Draw(GLContext context, GLTexture color, bool keepAlpha, int factor)
         {
             Init();
             GL.Disable(EnableCap.Blend);
@@ -799,23 +880,21 @@ namespace PlayerViewer.UI
             GL.Disable(EnableCap.DepthTest);
 
             context.CurrentShader = _shader;
-            _shader.SetInt("ENABLE_BLOOM", 0);
-            _shader.SetInt("ENABLE_LUT", 0);
-            _shader.SetInt("ENABLE_SRGB", 1);
-            _shader.SetInt("ENABLE_FBO_ALPHA", keepAlpha ? 1 : 0);
+            _shader.SetInt("uKeepAlpha", keepAlpha ? 1 : 0);
+            _shader.SetInt("uFactor", Math.Max(factor, 1));
 
             GL.ActiveTexture(TextureUnit.Texture1);
             color.Bind();
-            //Linear filtering does the supersample downsample.
+            //The shader samples texel centres itself, so no hardware filtering.
             GL.TexParameter(
                 TextureTarget.Texture2D,
                 TextureParameterName.TextureMinFilter,
-                (int)TextureMinFilter.Linear
+                (int)TextureMinFilter.Nearest
             );
             GL.TexParameter(
                 TextureTarget.Texture2D,
                 TextureParameterName.TextureMagFilter,
-                (int)TextureMagFilter.Linear
+                (int)TextureMagFilter.Nearest
             );
             _shader.SetInt("uColorTex", 1);
 

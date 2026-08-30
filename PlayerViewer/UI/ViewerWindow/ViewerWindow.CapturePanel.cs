@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime;
 using ImGuiNET;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -304,7 +305,7 @@ namespace PlayerViewer.UI
 
             bool haveFfmpeg = ExportUtil.FfmpegAvailable;
 
-            //--- Busy states: render phase or buffered encode phase, each with its own bar.
+            //--- Busy states: render phase or encode phase, each with its own bar.
             if (_animExporting)
             {
                 float progress =
@@ -323,15 +324,19 @@ namespace PlayerViewer.UI
                 if (_bufferedExporter.IsEncoding)
                 {
                     var ex = _bufferedExporter;
-                    float p =
-                        ex.EncodeTotal > 0
-                            ? Math.Min(ex.EncodeProgress / (float)ex.EncodeTotal, 1f)
-                            : 0f;
-                    ImGui.ProgressBar(
-                        p,
-                        new Vector2(-1, 0),
-                        $"Encoding {ex.EncodeProgress}/{ex.EncodeTotal}"
-                    );
+                    int total = ex.EncodeTotal;
+                    if (total > 0)
+                        ImGui.ProgressBar(
+                            Math.Min(ex.EncodeProgress / (float)total, 1f),
+                            new Vector2(-1, 0),
+                            $"{ex.EncodeStage} {ex.EncodeProgress}/{total}"
+                        );
+                    else
+                        ImGui.ProgressBar(
+                            (float)(ImGui.GetTime() % 1.0),
+                            new Vector2(-1, 0),
+                            ex.EncodeStage
+                        );
                     return;
                 }
                 //Encode finished on the worker thread: log and clear.
@@ -449,56 +454,96 @@ namespace PlayerViewer.UI
 
         //Renders and saves a still (no dialog). The scene always renders transparent (alpha
         //oracle); Transparent mode saves that directly, while Color/Image composite it over a
-        //matching crop of the background buffer. With trim on it renders at the internal
-        //(supersampled) resolution and crops from it so a loosely-framed subject stays sharp.
+        //matching crop of the background buffer. The capture size is what lands on disk and the
+        //render is that times ss, which is antialiasing that is averaged back off. With trim on
+        //the whole frame is rendered so the crop is found at full internal detail, then the crop
+        //is resolved down by ss on the CPU; without trim the pipeline resolves.
         void WriteScreenshot(string path)
         {
             var (_, w, h) = CaptureSizes[_captureRes];
-            int ss = Math.Clamp(_config.ExportSupersample, 1, 8);
+            int ss = ScenePipeline.ClampSupersample(_config.ExportSupersample, w, h);
             bool trim = _config.TrimDeadspace;
-            int renderedW = trim ? w * ss : w,
-                renderedH = trim ? h * ss : h;
-            using var img = trim
-                ? _pipeline.Capture(
-                    ActiveScene,
-                    w * ss,
-                    h * ss,
-                    _pipeline.BackgroundColor,
-                    transparent: true,
-                    1
-                )
-                : _pipeline.Capture(
-                    ActiveScene,
-                    w,
-                    h,
-                    _pipeline.BackgroundColor,
-                    transparent: true,
-                    ss
-                );
-
-            var rect = trim
-                ? TrimImage(img, _config.TrimMarginPx * ss)
-                : new Rectangle(0, 0, img.Width, img.Height);
-
-            if (Bg.Mode == 0)
+            using (
+                var img = trim
+                    ? _pipeline.Capture(
+                        ActiveScene,
+                        w * ss,
+                        h * ss,
+                        _pipeline.BackgroundColor,
+                        transparent: true,
+                        1
+                    )
+                    : _pipeline.Capture(
+                        ActiveScene,
+                        w,
+                        h,
+                        _pipeline.BackgroundColor,
+                        transparent: true,
+                        ss
+                    )
+            )
             {
-                img.SaveAsPng(path); //Transparent: keep alpha
+                if (img == null)
+                {
+                    Console.WriteLine($"[UI] Capture failed at {w * ss}x{h * ss}");
+                    return;
+                }
+
+                var rect = trim
+                    ? TrimImage(img, _config.TrimMarginPx * ss, ss)
+                    : new Rectangle(0, 0, img.Width, img.Height);
+                var outRect = trim
+                    ? new Rectangle(rect.X / ss, rect.Y / ss, rect.Width / ss, rect.Height / ss)
+                    : rect;
+
+                if (trim && ss > 1)
+                    img.Mutate(c =>
+                        c.Resize(
+                            new ResizeOptions
+                            {
+                                Size = new Size(outRect.Width, outRect.Height),
+                                Sampler = KnownResamplers.Box,
+                                Mode = ResizeMode.Stretch,
+                                Compand = true,
+                                PremultiplyAlpha = true,
+                            }
+                        )
+                    );
+
+                if (Bg.Mode == 0)
+                {
+                    img.SaveAsPng(path); //Transparent: keep alpha
+                }
+                else
+                {
+                    //Composite the (already cropped and resolved) scene over the same crop of the
+                    //background, built top-down at the output size so it stays registered.
+                    var bgBytes = ExportUtil.BuildBackground(w, h, Bg, bottomUp: false);
+                    using var bg = Image.LoadPixelData<Rgba32>(bgBytes, w, h);
+                    bg.Mutate(c => c.Crop(outRect).DrawImage(img, 1f));
+                    bg.SaveAsPng(path);
+                }
+                Console.WriteLine($"[UI] Saved {path}");
             }
-            else
-            {
-                //Composite the (already trim-cropped) scene over the same crop of the background,
-                //built top-down at the rendered resolution so it stays registered under trim.
-                var bgBytes = ExportUtil.BuildBackground(renderedW, renderedH, Bg, bottomUp: false);
-                using var bg = Image.LoadPixelData<Rgba32>(bgBytes, renderedW, renderedH);
-                bg.Mutate(c => c.Crop(rect).DrawImage(img, 1f));
-                bg.SaveAsPng(path);
-            }
-            Console.WriteLine($"[UI] Saved {path}");
+
+            ReleaseExportMemory();
+        }
+
+        static void ReleaseExportMemory()
+        {
+            SixLabors.ImageSharp.Configuration.Default.MemoryAllocator.ReleaseRetainedResources();
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         }
 
         //Crops fully-transparent (alpha==0) deadspace off a captured image in place, keeping a
-        //margin, and returns the crop rect it applied (full frame if nothing was cropped).
-        static Rectangle TrimImage(Image<Rgba32> img, int margin)
+        //margin, and returns the crop rect it applied (full frame if nothing was cropped). The
+        //rect is grown outwards to a multiple of align, whose multiple the image dimensions also
+        //are, so the crop divides evenly when it is resolved down.
+        static Rectangle TrimImage(Image<Rgba32> img, int margin, int align)
         {
             int w = img.Width,
                 h = img.Height;
@@ -527,6 +572,13 @@ namespace PlayerViewer.UI
                 y0 = Math.Max(0, minY - margin);
             int x1 = Math.Min(w - 1, maxX + margin),
                 y1 = Math.Min(h - 1, maxY + margin);
+            if (align > 1)
+            {
+                x0 -= x0 % align;
+                y0 -= y0 % align;
+                x1 = Math.Min(w - 1, x1 + align - 1 - x1 % align);
+                y1 = Math.Min(h - 1, y1 + align - 1 - y1 % align);
+            }
             int cw = x1 - x0 + 1,
                 ch = y1 - y0 + 1;
             if (cw >= w && ch >= h)
@@ -653,33 +705,23 @@ namespace PlayerViewer.UI
                 );
             _animExportFormat = format;
             _animExportTrim = _config.TrimDeadspace;
-            _animExportSupersample = Math.Clamp(_config.ExportSupersample, 1, 8);
             _animExportChain = chain;
 
-            //Supersample the render. With trim on, the crop keeps the full internal resolution
-            //(scale 1, larger frame) so a loosely-framed subject stays sharp; without trim, the
-            //factor becomes anti-alias supersampling downsampled back to the capture size. Even
-            //dimensions keep the raw RGBA stride aligned with ffmpeg's -video_size. Resize is
-            //frozen elsewhere for the duration because an export is in progress.
-            int ss = _animExportSupersample;
-            int bw = _pipeline.Width & ~1,
-                bh = _pipeline.Height & ~1;
-            int outW,
-                outH,
-                scale;
-            if (_animExportTrim)
-            {
-                outW = (bw * ss) & ~1;
-                outH = (bh * ss) & ~1;
-                scale = 1;
-            }
-            else
-            {
-                outW = bw;
-                outH = bh;
-                scale = ss;
-            }
-            _pipeline.ExportScaleOverride = scale;
+            //The video is the capture size, same as a still, and frames render at that times ss.
+            //ss is antialiasing that the pipeline's resolve pass averages away on the GPU before
+            //readback, so a captured frame is always output sized whether or not trim is on. Even
+            //dimensions keep the raw RGBA stride aligned with ffmpeg's -video_size.
+            //The pipeline stays at this size for the whole export (resize is frozen elsewhere) and
+            //the viewport draw resizes it back once _animExporting clears.
+            var (_, capW, capH) = CaptureSizes[_captureRes];
+            int outW = capW & ~1,
+                outH = capH & ~1;
+            _animExportSupersample = ScenePipeline.ClampSupersample(
+                _config.ExportSupersample,
+                outW,
+                outH
+            );
+            _pipeline.ExportScaleOverride = _animExportSupersample;
             _pipeline.Resize(outW, outH);
 
             //Precompute the full-frame background to composite over (null = keep alpha). Built at
@@ -688,11 +730,22 @@ namespace PlayerViewer.UI
                 ? null
                 : ExportUtil.BuildBackground(outW, outH, Bg, bottomUp: true);
 
-            //Buffer raw frames to disk then encode: faster than piping to ffmpeg live (the render
-            //loop never stalls on the encoder). Always render transparent (alpha oracle for the
-            //crop); the background is composited over the straight-alpha frames during encode.
+            //Frames stream into ffmpeg as they are rendered. Always render transparent (alpha
+            //oracle for the crop); the background is composited into each frame on the way out.
             _bufferedExporter = new BufferedAnimExporter();
-            if (!_bufferedExporter.StartCapture(outW, outH, _exportFps, path, _animExportTrim))
+            if (
+                !_bufferedExporter.StartCapture(
+                    outW,
+                    outH,
+                    _exportFps,
+                    path,
+                    _animExportTrim,
+                    _animExportFormat,
+                    _animExportBg,
+                    _config.WebpQuality,
+                    _config.TrimMarginPx
+                )
+            )
             {
                 Console.WriteLine($"[UI] Export failed: {_bufferedExporter.Error}");
                 _bufferedExporter.Dispose();
@@ -749,35 +802,26 @@ namespace PlayerViewer.UI
         {
             //Always render transparent (alpha oracle for the crop + composite). Matte the edge
             //fringe against the solid background color in Color mode (keeps a green key clean),
-            //otherwise a neutral color; the real background is composited during encode.
+            //otherwise a neutral color; the real background is composited on the writer thread.
             var matte = Bg.Mode == 1 ? BgColorVec : _pipeline.BackgroundColor;
-            var bytes = _pipeline.CaptureFrameBytes(
-                ActiveScene,
-                matte,
-                transparent: true,
-                out _,
-                out _
-            );
-            _bufferedExporter.PushFrame(bytes);
+            var buf = _bufferedExporter.RentFrameBuffer();
+            if (buf != null)
+            {
+                _pipeline.CaptureFrameBytes(ActiveScene, matte, transparent: true, buf);
+                _bufferedExporter.PushFrame(buf);
+            }
 
             _animExportIndex += _animExportAdvance;
             if (_animExportIndex >= _animExportTotal)
                 FinishAnimExport();
         }
 
-        //Natural completion: the render/capture phase is done. Kick off the encode pass on a
-        //worker; the panel polls _bufferedExporter for progress and clears it via
-        //FinishBufferedExport when encoding completes.
+        //Natural completion: the render/capture phase is done. Finishing runs on a worker; the
+        //panel polls _bufferedExporter for progress and clears it via FinishBufferedExport when
+        //encoding completes.
         void FinishAnimExport()
         {
-            //Margin is applied at the crop's (internal) resolution, so scale it with the
-            //supersample factor to keep the visual padding consistent.
-            _bufferedExporter.FinishCapture(
-                _animExportFormat,
-                _animExportBg,
-                _config.WebpQuality,
-                _config.TrimMarginPx * _animExportSupersample
-            );
+            _bufferedExporter.FinishCapture();
             _pipeline.ExportScaleOverride = 0;
             PlaybackSetPaused(_animExportPrevPaused);
             PlaybackSetFrame(_animExportPrevFrame);
@@ -806,6 +850,8 @@ namespace PlayerViewer.UI
                 Console.WriteLine($"[UI] Exported {_bufferedExporter.OutputPath}");
             _bufferedExporter.Dispose();
             _bufferedExporter = null;
+            _animExportBg = null;
+            ReleaseExportMemory();
         }
     }
 }

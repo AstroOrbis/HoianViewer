@@ -13,6 +13,20 @@ dotnet build -c Release
 
 Which builds to  `PlayerViewer/bin/Release/net10.0/PlayerViewer.exe`.
 
+
+For a self contained single file build:
+
+```
+cd PlayerViewer
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
+```
+
+Move the whole `publish` folder, not just the exe: `Shaders/`, `Resources/`, `Plugins/` and
+`Lib/` are read from disk beside it at runtime.
+
+
+`dotnet tool restore` is needed if you want to run csharpier for formatting.
+
 NuGet dependencies are pinned in `deps.json` for nix, so after changing a `PackageReference`:
 
 ```
@@ -39,7 +53,7 @@ You can drag `.bfres` or `.bfres.zs` files onto the viewer window to open them a
 
 **Standalone mode**: you can also load any BFRES model. Skeletal animations will be listed, and playing them will play their corresponding material, texture pattern, and visibility animations. Individual meshes can be toggled on/off.
 
-**Recording**: captures the viewport to an mp4 via ffmpeg (must be on PATH or in same folder as the app). 
+**Recording**: captures animation loops to mp4/webm(transparent)/webp(transparent) via ffmpeg (must be on PATH or in same folder as the app). 
 
 **Environment**: switch between the Viewer lighting and the AutoWalk stage lighting. You can also toggle Shadow Prepass (the models casting shadows)
 
@@ -54,6 +68,8 @@ ShaderLibrary/         shader binary parser
 ## Credits
 
 The viewer itself, Splatoon 3 Renderer & various fixes by [nvnprogram](https://github.com/nvnprogram).
+
+Various features (supersampler, anim loop export, etc) & CI by [AstroOrbis](https://github.com/AstroOrbis).
 
 Original versions of Cafe Shader Studio and ShaderLibrary by [KillzXGaming](https://github.com/killzxgaming).
 

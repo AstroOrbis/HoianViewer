@@ -1,5 +1,7 @@
 # only format our own code
 Cafe-Shader-Studio/
+ShaderLibrary/
+tools/nvpatch/
 
 # Build artifacts
 **/bin/

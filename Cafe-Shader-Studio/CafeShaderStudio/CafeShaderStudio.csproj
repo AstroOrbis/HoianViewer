@@ -48,9 +48,7 @@
     <Reference Include="Syroot.Maths">
       <HintPath>Lib\Syroot.Maths.dll</HintPath>
     </Reference>
-    <Reference Include="Toolbox.Core">
-      <HintPath>Lib\Toolbox.Core.dll</HintPath>
-    </Reference>
+    <ProjectReference Include="..\Toolbox.Core\Toolbox.Core.csproj" />
     <Reference Include="TrackStudioLibrary">
       <HintPath>Lib\TrackStudioLibrary.dll</HintPath>
     </Reference>
