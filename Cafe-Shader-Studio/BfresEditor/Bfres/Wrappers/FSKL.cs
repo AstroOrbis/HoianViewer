@@ -34,9 +34,9 @@ namespace BfresEditor
                 nodes.Add(new NodeBase(bone.Name) { Tag = bone, Icon = "/Images/Bone.png" });
 
             List<NodeBase> roots = new List<NodeBase>();
-            foreach (var bone in Bones)
+            for (int index = 0; index < Bones.Count; index++)
             {
-                int index = Bones.IndexOf(bone);
+                var bone = Bones[index];
                 if (bone.ParentIndex != -1)
                     nodes[bone.ParentIndex].AddChild(nodes[index]);
                 else
@@ -74,8 +74,9 @@ namespace BfresEditor
                     Visible = bone.Visible,
                 };
 
-                if (Skeleton.FlagsScaling == SkeletonFlagsScaling.Maya)
-                    genericBone.UseSegmentScaleCompensate = true;
+                genericBone.UseSegmentScaleCompensate =
+                    Skeleton.FlagsScaling == SkeletonFlagsScaling.Maya &&
+                    bone.ApplySegmentScaleCompensate;
 
                 if (bone.FlagsRotation == BoneFlagsRotation.EulerXYZ)
                 {

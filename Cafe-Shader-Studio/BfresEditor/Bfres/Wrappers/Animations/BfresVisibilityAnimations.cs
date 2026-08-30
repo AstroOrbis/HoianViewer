@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -68,12 +68,12 @@ namespace BfresEditor
                 AnimGroups.Add(group);
 
                 group.Track.KeyFrames.Add(new STKeyFrame() { Frame = 0, Value = baseValue ? 1 : 0 });
+            }
 
-                foreach (var curve in anim.Curves)
-                {
-                    if (curve.AnimDataOffset == i)
-                        BfresAnimations.GenerateKeys(group.Track, curve);
-                }
+            foreach (var curve in anim.Curves)
+            {
+                if (curve.AnimDataOffset < AnimGroups.Count)
+                    BfresAnimations.GenerateKeys(((BoneAnimGroup)AnimGroups[(int)curve.AnimDataOffset]).Track, curve);
             }
         }
 

@@ -55,6 +55,8 @@ namespace Toolbox.Core
                     Bones[i].Scale.X,
                     Bones[i].Scale.Y,
                     Bones[i].Scale.Z);
+                Bones[i].AnimationController.UseSegmentScaleCompensate =
+                    Bones[i].UseSegmentScaleCompensate;
 
                 foreach (var skeleton in Bones[i].SkeletonAttachments)
                 {
@@ -117,21 +119,24 @@ namespace Toolbox.Core
         }
 
         private Matrix4 GetWorldMatrix(STBone bone) {
-            var transform =
-                Matrix4.CreateScale(bone.AnimationController.Scale) *
-                Matrix4.CreateFromQuaternion(bone.AnimationController.Rotation) *
-                Matrix4.CreateTranslation(bone.AnimationController.Position);
+            var anim = bone.AnimationController;
 
-            if ((bone.UseSegmentScaleCompensate ||
-                           bone.AnimationController.UseSegmentScaleCompensate) && bone.Parent != null)
+            var transform =
+                Matrix4.CreateScale(anim.Scale) *
+                Matrix4.CreateFromQuaternion(anim.Rotation);
+
+            if (anim.UseSegmentScaleCompensate && bone.Parent != null)
             {
+                var parentScale = ((STBone)bone.Parent).AnimationController.Scale;
                 transform *= Matrix4.CreateScale(
-                         1f / ((STBone)bone.Parent).AnimationController.Scale.X,
-                         1f / ((STBone)bone.Parent).AnimationController.Scale.Y,
-                         1f / ((STBone)bone.Parent).AnimationController.Scale.Z);
+                         1f / parentScale.X,
+                         1f / parentScale.Y,
+                         1f / parentScale.Z);
             }
 
-            if (bone.ParentIndex != -1 && !bone.AnimationController.WorldTransform)
+            transform *= Matrix4.CreateTranslation(anim.Position);
+
+            if (bone.ParentIndex != -1 && !anim.WorldTransform)
                 return transform * GetWorldMatrix(bone.Parent);
             else
                 return transform * RootTransform;

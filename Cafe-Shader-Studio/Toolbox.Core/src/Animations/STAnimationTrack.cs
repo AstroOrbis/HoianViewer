@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -95,6 +95,36 @@ namespace Toolbox.Core.Animations
             return new STKeyFrame[] { k1, k2 };
         }
 
+        /// <summary>
+        /// Finds the keys either side of a frame: the last one at or before it and the
+        /// first one at or after it.
+        /// </summary>
+        private void GetSurroundingKeys(float frame, ref STKeyFrame left, ref STKeyFrame right)
+        {
+            if (KeyFrames.Count == 0)
+                return;
+
+            int lo = 0, hi = KeyFrames.Count;
+            while (lo < hi)
+            {
+                int mid = lo + (hi - lo) / 2;
+                if (KeyFrames[mid].Frame < frame)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
+
+            int first = lo;
+            while (lo < KeyFrames.Count && KeyFrames[lo].Frame <= frame)
+                lo++;
+
+            var last = KeyFrames[KeyFrames.Count - 1];
+
+            left = lo > 0 ? KeyFrames[lo - 1] : KeyFrames[0];
+            right = first < KeyFrames.Count && KeyFrames[first].Frame < last.Frame
+                ? KeyFrames[first] : last;
+        }
+
         private float GetWrapFrame(float frame)
         {
             var lastFrame = KeyFrames.Last().Frame;
@@ -120,11 +150,7 @@ namespace Toolbox.Core.Animations
             STKeyFrame RK = KeyFrames.Last();
 
             float Frame = GetWrapFrame(frame - startFrame);
-            foreach (STKeyFrame keyFrame in KeyFrames)
-            {
-                if (keyFrame.Frame <= Frame) LK = keyFrame;
-                if (keyFrame.Frame >= Frame && keyFrame.Frame < RK.Frame) RK = keyFrame;
-            }
+            GetSurroundingKeys(Frame, ref LK, ref RK);
 
             return new STKeyFrame[2] { LK, RK };
         }
@@ -146,11 +172,7 @@ namespace Toolbox.Core.Animations
             STKeyFrame RK = KeyFrames.Last();
 
             float Frame = GetWrapFrame(frame - startFrame);
-            foreach (STKeyFrame keyFrame in KeyFrames)
-            {
-                if (keyFrame.Frame <= Frame) LK = keyFrame;
-                if (keyFrame.Frame >= Frame && keyFrame.Frame < RK.Frame) RK = keyFrame;
-            }
+            GetSurroundingKeys(Frame, ref LK, ref RK);
 
             if (LK.Frame != RK.Frame)
             {

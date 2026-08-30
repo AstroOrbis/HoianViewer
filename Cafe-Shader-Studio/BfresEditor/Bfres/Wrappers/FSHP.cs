@@ -296,15 +296,17 @@ namespace BfresEditor
                 {
                     vertex.TexCoords = new Vector2[texCoords.Length];
                     for (int i = 0; i < texCoords.Length; i++)
-                        vertex.TexCoords[i] = new Vector2(texCoords[i][v].X, texCoords[i][v].Y);
+                        if (texCoords[i].Length > v)
+                            vertex.TexCoords[i] = new Vector2(texCoords[i][v].X, texCoords[i][v].Y);
                 }
                 if (colors.Length > 0)
                 {
                     vertex.Colors = new Vector4[colors.Length];
                     for (int i = 0; i < colors.Length; i++)
-                        vertex.Colors[i] = new Vector4(
-                            colors[i][v].X, colors[i][v].Y,
-                            colors[i][v].Z, colors[i][v].W);
+                        if (colors[i].Length > v)
+                            vertex.Colors[i] = new Vector4(
+                                colors[i][v].X, colors[i][v].Y,
+                                colors[i][v].Z, colors[i][v].W);
                 }
 
                 if (tangents.Length > 0)
@@ -449,15 +451,18 @@ namespace BfresEditor
         //Gets attributes with more than one channel
         private Syroot.Maths.Vector4F[][] TryGetChannelValues(VertexBufferHelper helper, string attribute)
         {
-            List<Syroot.Maths.Vector4F[]> channels = new List<Syroot.Maths.Vector4F[]>();
+            int count = 0;
             for (int i = 0; i < 10; i++)
-            {
                 if (helper.Contains($"{attribute}{i}"))
-                    channels.Add(helper[$"{attribute}{i}"].Data);
-                else
-                    break;
-            }
-            return channels.ToArray();
+                    count = i + 1;
+
+            var channels = new Syroot.Maths.Vector4F[count][];
+            for (int i = 0; i < count; i++)
+                channels[i] = helper.Contains($"{attribute}{i}")
+                    ? helper[$"{attribute}{i}"].Data
+                    : new Syroot.Maths.Vector4F[0];
+
+            return channels;
         }
 
         //Gets the attribute data given the attribute key.
