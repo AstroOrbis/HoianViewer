@@ -12,21 +12,23 @@ namespace ShaderLibrary.WiiU
         public static string GSH_PATH = "gshCompile.exe";
         public static string OUTPUT_PATH = "temp.gsh";
 
-        public GSHCompile() { }
+        public GSHCompile()
+        {
+
+        }
 
         public static bool IsValid()
         {
             return File.Exists(GSH_PATH);
         }
 
-        public static byte[] CompileStages(string vertex, string fragment, string geometry)
+        public static byte[] CompileStages(string vertex, string fragment, string geometry) 
         {
             string vsh_path = "temp.vert";
             string fsh_path = "temp.frag";
             string gsh_path = "temp.geom";
 
-            if (File.Exists(OUTPUT_PATH))
-                File.Delete(OUTPUT_PATH);
+            if (File.Exists(OUTPUT_PATH)) File.Delete(OUTPUT_PATH);
 
             //save shader
             File.WriteAllText(vsh_path, vertex);
@@ -36,18 +38,12 @@ namespace ShaderLibrary.WiiU
 
             string cmd = $"";
             // Shader stages
-            if (!string.IsNullOrEmpty(vertex))
-                cmd += $" -v {vsh_path}";
-            if (!string.IsNullOrEmpty(fragment))
-                cmd += $" -p {fsh_path}";
-            if (!string.IsNullOrEmpty(geometry))
-                cmd += $" -g {gsh_path}";
+            if (!string.IsNullOrEmpty(vertex))    cmd += $" -v {vsh_path}";
+            if (!string.IsNullOrEmpty(fragment))  cmd += $" -p {fsh_path}";
+            if (!string.IsNullOrEmpty(geometry))  cmd += $" -g {gsh_path}";
 
             //  Exec(GSH_PATH, $"-v {vsh_path} -p {fsh_path} -o {OUTPUT_PATH} -force_uniformblock -no_limit_array_syms -nospark -O");
-            Exec(
-                GSH_PATH,
-                $"{cmd} -o {OUTPUT_PATH} -force_uniformblock -no_limit_array_syms -nospark -O"
-            );
+            Exec(GSH_PATH, $"{cmd} -o {OUTPUT_PATH} -force_uniformblock -no_limit_array_syms -nospark -O");
 
             if (File.Exists(OUTPUT_PATH))
             {
@@ -60,14 +56,10 @@ namespace ShaderLibrary.WiiU
         {
             switch (type)
             {
-                case GSHShaderType.Vertex:
-                    return "-v";
-                case GSHShaderType.Pixel:
-                    return "-p";
-                case GSHShaderType.Geometry:
-                    return "-g";
-                case GSHShaderType.Compute:
-                    return "-c";
+                case GSHShaderType.Vertex: return "-v";
+                case GSHShaderType.Pixel: return "-p";
+                case GSHShaderType.Geometry: return "-g";
+                case GSHShaderType.Compute: return "-c";
                 default:
                     throw new ArgumentException($"Invalid type argument {type}!");
             }
@@ -92,7 +84,7 @@ namespace ShaderLibrary.WiiU
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
-                CreateNoWindow = true,
+                CreateNoWindow = true
             };
 
             Process cmd = new Process();
@@ -163,15 +155,12 @@ namespace ShaderLibrary.WiiU
                             var macro_values = line.Split();
 
                             var macroValue = macro_values[2];
-                            bool isBool =
-                                macroValue.Contains("true") || macroValue.Contains("false");
+                            bool isBool = macroValue.Contains("true") || macroValue.Contains("false");
 
                             if (isBool)
                             {
-                                if (macros[macroName] == "1")
-                                    macros[macroName] = "true";
-                                if (macros[macroName] == "0")
-                                    macros[macroName] = "false";
+                                if (macros[macroName] == "1") macros[macroName] = "true";
+                                if (macros[macroName] == "0") macros[macroName] = "false";
                             }
 
                             value = value.Replace(macroValue, macros[macroName]);

@@ -1,9 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using ShaderLibrary;
+﻿using ShaderLibrary;
 using ShaderLibrary.IO;
 using ShaderLibrary.WiiU;
+using System;
+using System.Collections.Generic;
+using System.IO;
 
 namespace BfshaLibrary.WiiU
 {
@@ -39,7 +39,6 @@ namespace BfshaLibrary.WiiU
             }
             return mem.ToArray();
         }
-
         public BfshaGX2VertexHeader() { }
 
         public BfshaGX2VertexHeader(BinaryDataReader reader)
@@ -70,7 +69,6 @@ namespace BfshaLibrary.WiiU
         }
 
         internal long _ofs_pos;
-
         public void Write(BinaryDataWriter writer)
         {
             UnusedHeader[7] = (uint)this.Loops.Count;
@@ -164,7 +162,6 @@ namespace BfshaLibrary.WiiU
         }
 
         private long _ofs_pos;
-
         public void Write(BinaryDataWriter writer)
         {
             UnusedHeader[7] = (uint)this.Loops.Count;

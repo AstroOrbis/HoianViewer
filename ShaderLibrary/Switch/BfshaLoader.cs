@@ -1,4 +1,5 @@
-﻿using System;
+﻿using ShaderLibrary.IO;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Drawing;
@@ -7,7 +8,6 @@ using System.Reflection.PortableExecutable;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
-using ShaderLibrary.IO;
 
 namespace ShaderLibrary.Switch
 {
@@ -87,7 +87,7 @@ namespace ShaderLibrary.Switch
             ushort dynamicOptionCount = reader.ReadUInt16();
             ushort programCount = reader.ReadUInt16();
             if (reader.Header.VersionMajor < 7)
-                reader.ReadUInt16(); //unk
+                reader.ReadUInt16(); //unk 
 
             shaderModel.StaticKeyLength = reader.ReadByte();
             shaderModel.DynamicKeyLength = reader.ReadByte();
@@ -118,26 +118,19 @@ namespace ShaderLibrary.Switch
             var bnshFileStream = new SubStream(reader.BaseStream, shaderFileOffset, bnshSize);
             shaderModel.BnshFile = new BnshFile(bnshFileStream);
 
-            shaderModel.Programs = ReadArray(
-                reader,
-                (ulong)shaderProgramArrayOffset,
-                programCount,
-                ReadBfshaShaderProgram
-            );
+            shaderModel.Programs = ReadArray(reader,
+                 (ulong)shaderProgramArrayOffset,
+                 programCount, ReadBfshaShaderProgram);
 
             foreach (var program in shaderModel.Programs)
                 program.ParentShader = shaderModel;
 
-            shaderModel.KeyTable = reader.ReadCustom(
-                () =>
-                {
-                    int numKeysPerProgram =
-                        shaderModel.StaticKeyLength + shaderModel.DynamicKeyLength;
+            shaderModel.KeyTable = reader.ReadCustom(() =>
+            {
+                int numKeysPerProgram = shaderModel.StaticKeyLength + shaderModel.DynamicKeyLength;
 
-                    return reader.ReadInt32s(numKeysPerProgram * shaderModel.Programs.Count);
-                },
-                (ulong)keyTableOffset
-            );
+                return reader.ReadInt32s(numKeysPerProgram * shaderModel.Programs.Count);
+            }, (ulong)keyTableOffset);
 
             if (symbolInfoOffset != 0)
             {
@@ -202,18 +195,14 @@ namespace ShaderLibrary.Switch
                 uint padding = reader.ReadUInt32();
             }
 
-            option.ChoiceValues = reader.ReadCustom(
-                () =>
-                {
-                    return reader.ReadUInt32s(choiceCount);
-                },
-                choiceValuesOffset
-            );
+            option.ChoiceValues = reader.ReadCustom(() =>
+            {
+                return reader.ReadUInt32s(choiceCount);
+            }, choiceValuesOffset);
             return option;
         }
 
-        internal static ResUint32 ReadResUint(BinaryDataReader reader) =>
-            new ResUint32(reader.ReadUInt32());
+        static internal ResUint32 ReadResUint(BinaryDataReader reader) => new ResUint32(reader.ReadUInt32());
 
         static BfshaStorageBuffer ReadStorageBuffer(BinaryDataReader reader)
         {
@@ -234,18 +223,14 @@ namespace ShaderLibrary.Switch
 
             long pos = reader.BaseStream.Position;
 
-            block.Uniforms = LoadDictionary(
-                reader,
-                block.header.UniformDictionaryOffset,
-                block.header.UniformArrayOffset,
-                ReadBfshaUniform
-            );
+            block.Uniforms = LoadDictionary(reader,
+                       block.header.UniformDictionaryOffset,
+                       block.header.UniformArrayOffset,
+                       ReadBfshaUniform);
 
             // Read default buffer
-            block.DefaultBuffer = reader.ReadCustom(
-                () => reader.ReadBytes(block.header.Size),
-                (uint)block.header.DefaultOffset
-            );
+            block.DefaultBuffer = reader.ReadCustom(() =>
+                reader.ReadBytes(block.header.Size), (uint)block.header.DefaultOffset);
 
             reader.SeekBegin(pos);
             return block;
@@ -276,30 +261,10 @@ namespace ShaderLibrary.Switch
                 prog.UsedAttributeFlags = header.UsedAttributeFlags;
                 prog.Flags = header.Flags;
 
-                prog.UniformBlockIndices = ReadArray(
-                    reader,
-                    header.UniformIndexTableBlockOffset,
-                    header.NumBlocks,
-                    ReadShaderLocations
-                );
-                prog.SamplerIndices = ReadArray(
-                    reader,
-                    header.SamplerIndexTableOffset,
-                    header.NumSamplers,
-                    ReadShaderLocations
-                );
-                prog.ImageIndices = ReadArray(
-                    reader,
-                    header.ImageIndexTableOffset,
-                    header.NumImages,
-                    ReadShaderLocations
-                );
-                prog.StorageBufferIndices = ReadArray(
-                    reader,
-                    header.StorageBufferIndexTableOffset,
-                    header.NumStorageBuffers,
-                    ReadShaderLocations
-                );
+                prog.UniformBlockIndices = ReadArray(reader, header.UniformIndexTableBlockOffset, header.NumBlocks, ReadShaderLocations);
+                prog.SamplerIndices = ReadArray(reader, header.SamplerIndexTableOffset, header.NumSamplers, ReadShaderLocations);
+                prog.ImageIndices = ReadArray(reader, header.ImageIndexTableOffset, header.NumImages, ReadShaderLocations);
+                prog.StorageBufferIndices = ReadArray(reader, header.StorageBufferIndexTableOffset, header.NumStorageBuffers, ReadShaderLocations);
             }
             else if (reader.Header.VersionMajor >= 7)
             {
@@ -310,24 +275,9 @@ namespace ShaderLibrary.Switch
                 prog.UsedAttributeFlags = header.UsedAttributeFlags;
                 prog.Flags = header.Flags;
 
-                prog.UniformBlockIndices = ReadArray(
-                    reader,
-                    header.UniformIndexTableBlockOffset,
-                    header.NumBlocks,
-                    ReadShaderLocations
-                );
-                prog.SamplerIndices = ReadArray(
-                    reader,
-                    header.SamplerIndexTableOffset,
-                    header.NumSamplers,
-                    ReadShaderLocations
-                );
-                prog.StorageBufferIndices = ReadArray(
-                    reader,
-                    header.StorageBufferIndexTableOffset,
-                    header.NumStorageBuffers,
-                    ReadShaderLocations
-                );
+                prog.UniformBlockIndices = ReadArray(reader, header.UniformIndexTableBlockOffset, header.NumBlocks, ReadShaderLocations);
+                prog.SamplerIndices = ReadArray(reader, header.SamplerIndexTableOffset, header.NumSamplers, ReadShaderLocations);
+                prog.StorageBufferIndices = ReadArray(reader, header.StorageBufferIndexTableOffset, header.NumStorageBuffers, ReadShaderLocations);
             }
             else if (reader.Header.VersionMajor >= 5)
             {
@@ -337,18 +287,8 @@ namespace ShaderLibrary.Switch
                 prog.VariationOffset = header.VariationOffset;
                 prog.UsedAttributeFlags = header.UsedAttributeFlags;
                 prog.Flags = header.Flags;
-                prog.UniformBlockIndices = ReadArray(
-                    reader,
-                    header.UniformIndexTableBlockOffset,
-                    header.NumBlocks,
-                    ReadShaderLocations
-                );
-                prog.SamplerIndices = ReadArray(
-                    reader,
-                    header.SamplerIndexTableOffset,
-                    header.NumSamplers,
-                    ReadShaderLocations
-                );
+                prog.UniformBlockIndices = ReadArray(reader, header.UniformIndexTableBlockOffset, header.NumBlocks, ReadShaderLocations);
+                prog.SamplerIndices = ReadArray(reader, header.SamplerIndexTableOffset, header.NumSamplers, ReadShaderLocations);
             }
             else
             {
@@ -359,18 +299,8 @@ namespace ShaderLibrary.Switch
                 prog.UsedAttributeFlags = header.UsedAttributeFlags;
                 prog.Flags = header.Flags;
 
-                prog.UniformBlockIndices = ReadArray(
-                    reader,
-                    header.UniformIndexTableBlockOffset,
-                    header.NumBlocks,
-                    ReadShaderLocations
-                );
-                prog.SamplerIndices = ReadArray(
-                    reader,
-                    header.SamplerIndexTableOffset,
-                    header.NumSamplers,
-                    ReadShaderLocations
-                );
+                prog.UniformBlockIndices = ReadArray(reader, header.UniformIndexTableBlockOffset, header.NumBlocks, ReadShaderLocations);
+                prog.SamplerIndices = ReadArray(reader, header.SamplerIndexTableOffset, header.NumSamplers, ReadShaderLocations);
             }
             return prog;
         }
@@ -405,67 +335,22 @@ namespace ShaderLibrary.Switch
 
             if (reader.Header.VersionMajor >= 8)
             {
-                symbolTable.Samplers = ReadArray(
-                    reader,
-                    reader.ReadUInt64(),
-                    shaderModel.Samplers.Count,
-                    ReadSymbol
-                );
-                symbolTable.Images = ReadArray(
-                    reader,
-                    reader.ReadUInt64(),
-                    shaderModel.Images.Count,
-                    ReadSymbol
-                );
-                symbolTable.UniformBlocks = ReadArray(
-                    reader,
-                    reader.ReadUInt64(),
-                    shaderModel.UniformBlocks.Count,
-                    ReadSymbol
-                );
-                symbolTable.StorageBuffers = ReadArray(
-                    reader,
-                    reader.ReadUInt64(),
-                    shaderModel.StorageBuffers.Count,
-                    ReadSymbol
-                );
+                symbolTable.Samplers = ReadArray(reader, reader.ReadUInt64(), shaderModel.Samplers.Count, ReadSymbol);
+                symbolTable.Images = ReadArray(reader, reader.ReadUInt64(), shaderModel.Images.Count, ReadSymbol);
+                symbolTable.UniformBlocks = ReadArray(reader, reader.ReadUInt64(), shaderModel.UniformBlocks.Count, ReadSymbol);
+                symbolTable.StorageBuffers = ReadArray(reader, reader.ReadUInt64(), shaderModel.StorageBuffers.Count, ReadSymbol);
             }
             else if (reader.Header.VersionMajor >= 7)
             {
-                symbolTable.Samplers = ReadArray(
-                    reader,
-                    reader.ReadUInt64(),
-                    shaderModel.Samplers.Count,
-                    ReadSymbol
-                );
-                symbolTable.UniformBlocks = ReadArray(
-                    reader,
-                    reader.ReadUInt64(),
-                    shaderModel.UniformBlocks.Count,
-                    ReadSymbol
-                );
-                symbolTable.StorageBuffers = ReadArray(
-                    reader,
-                    reader.ReadUInt64(),
-                    shaderModel.StorageBuffers.Count,
-                    ReadSymbol
-                );
+                symbolTable.Samplers = ReadArray(reader, reader.ReadUInt64(), shaderModel.Samplers.Count, ReadSymbol);
+                symbolTable.UniformBlocks = ReadArray(reader, reader.ReadUInt64(), shaderModel.UniformBlocks.Count, ReadSymbol);
+                symbolTable.StorageBuffers = ReadArray(reader, reader.ReadUInt64(), shaderModel.StorageBuffers.Count, ReadSymbol);
                 reader.ReadUInt64();
             }
             else
             {
-                symbolTable.Samplers = ReadArray(
-                    reader,
-                    reader.ReadUInt64(),
-                    shaderModel.Samplers.Count,
-                    ReadSymbol
-                );
-                symbolTable.UniformBlocks = ReadArray(
-                    reader,
-                    reader.ReadUInt64(),
-                    shaderModel.UniformBlocks.Count,
-                    ReadSymbol
-                );
+                symbolTable.Samplers = ReadArray(reader, reader.ReadUInt64(), shaderModel.Samplers.Count, ReadSymbol);
+                symbolTable.UniformBlocks = ReadArray(reader, reader.ReadUInt64(), shaderModel.UniformBlocks.Count, ReadSymbol);
                 reader.ReadUInt64();
                 reader.ReadUInt64();
             }
@@ -494,13 +379,8 @@ namespace ShaderLibrary.Switch
             return symbol;
         }
 
-        static List<T> ReadArray<T>(
-            BinaryDataReader reader,
-            ulong offset,
-            int count,
-            Func<BinaryDataReader, T> load_section
-        )
-            where T : class, new()
+        static List<T> ReadArray<T>(BinaryDataReader reader, ulong offset, int count,
+            Func<BinaryDataReader, T> load_section) where T : class, new()
         {
             var start = reader.Position;
             reader.SeekBegin((long)offset);
@@ -513,24 +393,15 @@ namespace ShaderLibrary.Switch
             return values.ToList();
         }
 
-        internal static ResDict<T> LoadDictionary<T>(
-            BinaryDataReader reader,
-            Func<BinaryDataReader, T> load_section
-        )
-            where T : class, IResData, new()
+        static internal ResDict<T> LoadDictionary<T>(BinaryDataReader reader, Func<BinaryDataReader, T> load_section) where T : class, IResData, new()
         {
             var valuesOffset = reader.ReadUInt64();
             var dictOffset = reader.ReadUInt64();
             return LoadDictionary(reader, dictOffset, valuesOffset, load_section);
         }
 
-        internal static ResDict<T> LoadDictionary<T>(
-            BinaryDataReader reader,
-            ulong dictOffset,
-            ulong valuesOffset,
-            Func<BinaryDataReader, T> load_section
-        )
-            where T : class, IResData, new()
+        static internal ResDict<T> LoadDictionary<T>(BinaryDataReader reader,
+                  ulong dictOffset, ulong valuesOffset,  Func<BinaryDataReader, T> load_section) where T : class, IResData, new()
         {
             ResDict<T> dict = new ResDict<T>();
             if (dictOffset == 0)
@@ -548,15 +419,13 @@ namespace ShaderLibrary.Switch
                 var idxRight = reader.ReadUInt16();
                 var key = reader.LoadString(reader.ReadUInt64());
 
-                dict._nodes.Add(
-                    new ResDict<T>.Node()
-                    {
-                        Reference = refe,
-                        IdxLeft = idxLeft,
-                        IdxRight = idxRight,
-                        Key = key,
-                    }
-                );
+                dict._nodes.Add(new ResDict<T>.Node()
+                {
+                    Reference = refe,
+                    IdxLeft = idxLeft,
+                    IdxRight = idxRight,
+                    Key = key,
+                });
 
                 if (i == 0)
                     continue;

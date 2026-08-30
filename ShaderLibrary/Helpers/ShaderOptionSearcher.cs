@@ -13,10 +13,7 @@ namespace ShaderLibrary.Helpers
         //Program key table indexed by hashed key vector, built once per shader model.
         //Without this every lookup scans all programs, and the lenient fallback scan
         //does string work per program per option, which takes seconds per material.
-        static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
-            ShaderModel,
-            Dictionary<KeyVector, int>
-        > _programLookups = new();
+        static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ShaderModel, Dictionary<KeyVector, int>> _programLookups = new();
 
         readonly struct KeyVector : IEquatable<KeyVector>
         {
@@ -50,33 +47,28 @@ namespace ShaderLibrary.Helpers
             }
 
             public override bool Equals(object obj) => obj is KeyVector other && Equals(other);
-
             public override int GetHashCode() => _hash;
         }
 
         static Dictionary<KeyVector, int> GetProgramLookup(ShaderModel shader)
         {
-            return _programLookups.GetValue(
-                shader,
-                s =>
+            return _programLookups.GetValue(shader, s =>
+            {
+                int stride = s.StaticKeyLength + s.DynamicKeyLength;
+                var lookup = new Dictionary<KeyVector, int>(s.Programs.Count);
+                for (int i = 0; i < s.Programs.Count; i++)
                 {
-                    int stride = s.StaticKeyLength + s.DynamicKeyLength;
-                    var lookup = new Dictionary<KeyVector, int>(s.Programs.Count);
-                    for (int i = 0; i < s.Programs.Count; i++)
-                    {
-                        var key = new KeyVector(s.KeyTable, stride * i, stride);
-                        if (!lookup.ContainsKey(key))
-                            lookup.Add(key, i);
-                    }
-                    return lookup;
+                    var key = new KeyVector(s.KeyTable, stride * i, stride);
+                    if (!lookup.ContainsKey(key))
+                        lookup.Add(key, i);
                 }
-            );
+                return lookup;
+            });
         }
 
         //Profiling: exact hashed hits vs full lenient scans (the expensive path).
         public static readonly Stopwatch SearchTime = new Stopwatch();
-        public static int ExactHits,
-            LenientScans;
+        public static int ExactHits, LenientScans;
 
         public static int GetProgramIndex(ShaderModel shader, Dictionary<string, string> options)
         {
@@ -85,10 +77,7 @@ namespace ShaderLibrary.Helpers
             {
                 //Generate keys of the shader options and look them up in the hashed key table.
                 int[] key_lookup = WriteOptionKeys(shader, options);
-                if (
-                    GetProgramLookup(shader)
-                        .TryGetValue(new KeyVector(key_lookup, 0, key_lookup.Length), out int index)
-                )
+                if (GetProgramLookup(shader).TryGetValue(new KeyVector(key_lookup, 0, key_lookup.Length), out int index))
                 {
                     ExactHits++;
                     return index;
@@ -102,10 +91,7 @@ namespace ShaderLibrary.Helpers
                 LenientScans++;
                 return LenientSearch(shader, options, key_lookup);
             }
-            finally
-            {
-                SearchTime.Stop();
-            }
+            finally { SearchTime.Stop(); }
         }
 
         /// <summary>
@@ -115,11 +101,7 @@ namespace ShaderLibrary.Helpers
         /// The query is precompiled to (key index, mask, shift, choice index) so the
         /// per-program work is integer-only.
         /// </summary>
-        static int LenientSearch(
-            ShaderModel shader,
-            Dictionary<string, string> options,
-            int[] expectedKeys
-        )
+        static int LenientSearch(ShaderModel shader, Dictionary<string, string> options, int[] expectedKeys)
         {
             int stride = shader.StaticKeyLength + shader.DynamicKeyLength;
 
@@ -139,9 +121,7 @@ namespace ShaderLibrary.Helpers
                 }
                 else
                 {
-                    int expectedIdx = (int)(
-                        ((uint)expectedKeys[keyIndex] & option.Bit32Mask) >> option.Bit32Shift
-                    );
+                    int expectedIdx = (int)(((uint)expectedKeys[keyIndex] & option.Bit32Mask) >> option.Bit32Shift);
                     scored.Add((keyIndex, option.Bit32Mask, option.Bit32Shift, expectedIdx));
                 }
             }
@@ -159,16 +139,13 @@ namespace ShaderLibrary.Helpers
                 }
                 else
                 {
-                    int expectedIdx = (int)(
-                        ((uint)expectedKeys[keyIndex] & option.Bit32Mask) >> option.Bit32Shift
-                    );
+                    int expectedIdx = (int)(((uint)expectedKeys[keyIndex] & option.Bit32Mask) >> option.Bit32Shift);
                     scored.Add((keyIndex, option.Bit32Mask, option.Bit32Shift, expectedIdx));
                 }
             }
 
             var table = shader.KeyTable;
-            int best = -1,
-                bestScore = -1;
+            int best = -1, bestScore = -1;
             for (int i = 0; i < shader.Programs.Count; i++)
             {
                 int baseIndex = stride * i;
@@ -232,13 +209,7 @@ namespace ShaderLibrary.Helpers
                 //Set the static option choice
                 int choiceIndex = option.Choices.GetIndex(options[option.Name]);
                 if (choiceIndex == -1)
-                    throw new Exception(
-                        string.Format(
-                            "Invalid choice given {1} for option {0}!",
-                            option.Name,
-                            options[option.Name]
-                        )
-                    );
+                    throw new Exception(string.Format("Invalid choice given {1} for option {0}!", option.Name, options[option.Name]));
 
                 option.SetKey(ref key_lookup[option.Bit32Index], choiceIndex);
             }
@@ -252,13 +223,7 @@ namespace ShaderLibrary.Helpers
                 //Set the dynamic option choice
                 int choiceIndex = option.Choices.GetIndex(options[option.Name]);
                 if (choiceIndex == -1)
-                    throw new Exception(
-                        string.Format(
-                            "Invalid choice given {1} for option {0}!",
-                            option.Name,
-                            options[option.Name]
-                        )
-                    );
+                    throw new Exception(string.Format("Invalid choice given {1} for option {0}!", option.Name, options[option.Name]));
 
                 int ind = option.Bit32Index - option.KeyOffset;
                 option.SetKey(ref key_lookup[shader.StaticKeyLength + ind], choiceIndex);
@@ -293,11 +258,7 @@ namespace ShaderLibrary.Helpers
             return keys;
         }
 
-        public static bool IsValidProgram(
-            ShaderModel shader,
-            int programIndex,
-            Dictionary<string, string> options
-        )
+        public static bool IsValidProgram(ShaderModel shader, int programIndex, Dictionary<string, string> options)
         {
             //The amount of keys used per program
             int numKeysPerProgram = shader.StaticKeyLength + shader.DynamicKeyLength;
@@ -313,13 +274,9 @@ namespace ShaderLibrary.Helpers
                     continue;
 
                 //Get key in table
-                int choiceIndex = option.GetChoiceIndex(
-                    shader.KeyTable[baseIndex + option.Bit32Index]
-                );
+                int choiceIndex = option.GetChoiceIndex(shader.KeyTable[baseIndex + option.Bit32Index]);
                 if (choiceIndex > option.Choices.Count)
-                    throw new Exception(
-                        $"Invalid choice index in key table! Option {option.Name} choice {options[option.Name]}"
-                    );
+                    throw new Exception($"Invalid choice index in key table! Option {option.Name} choice {options[option.Name]}");
 
                 //If the choice is not in the program, then skip the current program
                 var choice = option.Choices.GetKey(choiceIndex);
@@ -334,9 +291,7 @@ namespace ShaderLibrary.Helpers
                     continue;
 
                 int ind = option.Bit32Index - option.KeyOffset;
-                int choiceIndex = option.GetChoiceIndex(
-                    shader.KeyTable[baseIndex + shader.StaticKeyLength + ind]
-                );
+                int choiceIndex = option.GetChoiceIndex(shader.KeyTable[baseIndex + shader.StaticKeyLength + ind]);
                 if (choiceIndex > option.Choices.Count)
                     throw new Exception($"Invalid choice index in key table!");
 
@@ -348,10 +303,7 @@ namespace ShaderLibrary.Helpers
         }
 
         //Checks if the shader option list is missing any shader option choices required for a full key search
-        public static void CheckMissingShaderOptions(
-            ShaderModel shader,
-            Dictionary<string, string> options
-        )
+        public static void CheckMissingShaderOptions(ShaderModel shader, Dictionary<string, string> options)
         {
             int num_keys_per_program = shader.StaticKeyLength + shader.DynamicKeyLength;
             for (int i = 0; i < shader.Programs.Count; i++)
@@ -361,11 +313,7 @@ namespace ShaderLibrary.Helpers
             }
         }
 
-        static void CheckChoices(
-            ShaderModel shader,
-            int programIndex,
-            Dictionary<string, string> options
-        )
+        static void CheckChoices(ShaderModel shader, int programIndex, Dictionary<string, string> options)
         {
             Debug.WriteLine($"checking program {programIndex}");
 
@@ -376,41 +324,30 @@ namespace ShaderLibrary.Helpers
             for (int j = 0; j < shader.StaticOptions.Count; j++)
             {
                 var option = shader.StaticOptions[j];
-                int choiceIndex = option.GetChoiceIndex(
-                    shader.KeyTable[baseIndex + option.Bit32Index]
-                );
+                int choiceIndex = option.GetChoiceIndex(shader.KeyTable[baseIndex + option.Bit32Index]);
                 if (choiceIndex > option.Choices.Count || choiceIndex == -1)
-                    throw new Exception(
-                        $"Invalid choice index in key table! {option.Name} index {choiceIndex}"
-                    );
+                    throw new Exception($"Invalid choice index in key table! {option.Name} index {choiceIndex}");
 
                 string choice = option.Choices.GetKey(choiceIndex);
 
                 //A shader option choice not set in the lookup and not a default choice
                 //This must be set for a valid lookup
                 if (!options.ContainsKey(option.Name) && choice != option.DefaultChoice)
-                    Debug.WriteLine(
-                        $"Unexpected choice value {option.Name} should be {choice}, not default {option.DefaultChoice}"
-                    );
+                    Debug.WriteLine($"Unexpected choice value {option.Name} should be {choice}, not default {option.DefaultChoice}");
             }
 
             for (int j = 0; j < shader.DynamicOptions.Count; j++)
             {
                 var option = shader.DynamicOptions[j];
                 int ind = option.Bit32Index - option.KeyOffset;
-                int choiceIndex = option.GetChoiceIndex(
-                    shader.KeyTable[baseIndex + shader.StaticKeyLength + ind]
-                );
+                int choiceIndex = option.GetChoiceIndex(shader.KeyTable[baseIndex + shader.StaticKeyLength + ind]);
                 if (choiceIndex > option.Choices.Count || choiceIndex == -1)
-                    throw new Exception(
-                        $"Invalid choice index in key table! {option.Name} index {choiceIndex}"
-                    );
+                    throw new Exception($"Invalid choice index in key table! {option.Name} index {choiceIndex}");
+
 
                 string choice = option.Choices.GetKey(choiceIndex);
                 if (!options.ContainsKey(option.Name) && choice != option.DefaultChoice)
-                    Debug.WriteLine(
-                        $"Unexpected choice value {option.Name} should be {choice}, not default {option.DefaultChoice}"
-                    );
+                    Debug.WriteLine($"Unexpected choice value {option.Name} should be {choice}, not default {option.DefaultChoice}");
             }
         }
     }

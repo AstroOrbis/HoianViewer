@@ -1,15 +1,18 @@
-﻿using System;
+﻿using ShaderLibrary.IO;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using ShaderLibrary.IO;
 
 namespace ShaderLibrary
 {
     public class ResString : IResData
     {
-        public string String { get; set; }
+        public string String
+        {
+            get; set;
+        }
 
         public static implicit operator ResString(string value)
         {
@@ -21,11 +24,10 @@ namespace ShaderLibrary
             return value.String;
         }
 
-        public override string ToString()
-        {
-            return String;
-        }
+        public override string ToString() { return String; }
 
-        public void Read(BinaryDataReader reader) { }
+        public void Read(BinaryDataReader reader)
+        {
+        }
     }
 }

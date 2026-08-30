@@ -1,11 +1,13 @@
-﻿using System;
+﻿using ShaderLibrary.IO;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using ShaderLibrary.IO;
 
 namespace ShaderLibrary
 {
-    public interface IResData { }
+    public interface IResData
+    {
+    }
 }

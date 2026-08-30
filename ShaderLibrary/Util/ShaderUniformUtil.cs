@@ -9,31 +9,19 @@ namespace ShaderLibrary
 {
     public class ShaderUniformUtil
     {
-        public static List<string> FindUniformsVertex(
-            string shaderCode,
-            BfshaShaderProgram program,
-            BfshaUniformBlock block
-        )
+        public static List<string> FindUniformsVertex(string shaderCode, BfshaShaderProgram program, BfshaUniformBlock block)
         {
             var locationInfo = program.UniformBlockIndices[block.Index];
             return FindUniforms(shaderCode, block, $"vp_c{locationInfo.FragmentLocation + 3}.data");
         }
 
-        public static List<string> FindUniformsFragment(
-            string shaderCode,
-            BfshaShaderProgram program,
-            BfshaUniformBlock block
-        )
+        public static List<string> FindUniformsFragment(string shaderCode, BfshaShaderProgram program, BfshaUniformBlock block)
         {
             var locationInfo = program.UniformBlockIndices[block.Index];
             return FindUniforms(shaderCode, block, $"fp_c{locationInfo.FragmentLocation + 3}.data");
         }
 
-        public static List<string> FindUniforms(
-            string shaderCode,
-            BfshaUniformBlock block,
-            string blockName
-        )
+        public static List<string> FindUniforms(string shaderCode, BfshaUniformBlock block, string blockName)
         {
             string swizzle = "x";
 
@@ -76,12 +64,9 @@ namespace ShaderLibrary
 
         static string SwizzleShift(string swizzle)
         {
-            if (swizzle == "x")
-                return "y";
-            if (swizzle == "y")
-                return "z";
-            if (swizzle == "z")
-                return "w";
+            if (swizzle == "x") return "y";
+            if (swizzle == "y") return "z";
+            if (swizzle == "z") return "w";
             return "x";
         }
     }
