@@ -1,0 +1,13 @@
+nvpatch
+Copyright (c) 2014-2025 Topten Software. All Rights Reserved.
+
+Upstream: https://github.com/toptensoftware/nvpatch
+Vendored from nvpatch 0.1.108.
+
+Licensed under the Apache License, Version 2.0. See LICENSE in this directory.
+
+Changes made to the original source
+-----------------------------------
+PEExportTable.cs, WriteExportTable: the export name pointer table is now sorted with
+StringComparer.Ordinal instead of the default string comparator.
+The PE format requires ordinal order because GetProcAddress binary searches that table.

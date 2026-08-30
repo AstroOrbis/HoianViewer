@@ -32,9 +32,7 @@
     <Reference Include="Syroot.Maths">
       <HintPath>..\CafeShaderStudio\Lib\Syroot.Maths.dll</HintPath>
     </Reference>
-    <Reference Include="Toolbox.Core">
-      <HintPath>..\CafeShaderStudio\Lib\Toolbox.Core.dll</HintPath>
-    </Reference>
+    <ProjectReference Include="..\Toolbox.Core\Toolbox.Core.csproj" />
   </ItemGroup>
 
 </Project>

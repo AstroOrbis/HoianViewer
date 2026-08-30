@@ -53,8 +53,23 @@ namespace PlayerViewer.UI
                                 CreateNoWindow = true,
                             }
                         );
-                        probe.WaitForExit(5000);
-                        _ffmpegAvailable = true;
+                        //Drain both pipes so the probe cannot block on a full one, then judge it
+                        //by its exit code: a binary that starts but fails is not usable ffmpeg.
+                        probe.BeginOutputReadLine();
+                        probe.BeginErrorReadLine();
+                        if (probe.WaitForExit(5000))
+                        {
+                            _ffmpegAvailable = probe.ExitCode == 0;
+                        }
+                        else
+                        {
+                            try
+                            {
+                                probe.Kill(entireProcessTree: true);
+                            }
+                            catch { }
+                            _ffmpegAvailable = false;
+                        }
                     }
                     catch
                     {
@@ -94,8 +109,28 @@ namespace PlayerViewer.UI
 
         /// <summary>Raw-RGBA input args for a pipe of the given size and rate.</summary>
         public static string RawInputArgs(int width, int height, int fps) =>
-            $"-y -f rawvideo -pixel_format rgba -video_size {width}x{height} "
-            + $"-framerate {fps} -i pipe:0 -vf vflip ";
+            $"-y -nostats -f rawvideo -pixel_format rgba -video_size {width}x{height} "
+            + $"-framerate {fps} -i pipe:0 ";
+
+        /// <summary>Container the trim path's lossless intermediate is written to.</summary>
+        public const string IntermediateExt = ".mkv";
+
+        /// <summary>
+        /// Output args for the trim path's first pass. FFV1 is intra only and bit exact, and bgra
+        /// is its only packed 8 bit format with an alpha channel, so the straight alpha that the
+        /// trim crop and the transparent WebP/WebM exports depend on survives the round trip
+        /// unchanged. Level 3 slices let it encode across threads.
+        /// </summary>
+        public static string IntermediateArgs(string path) =>
+            "-c:v ffv1 -level 3 -coder 1 -context 1 -slices 4 -slicecrc 1 -pix_fmt bgra "
+            + $"\"{path}\"";
+
+        /// <summary>
+        /// Input args for the trim path's second pass. -progress reports the frame counter on
+        /// stdout, which is the only per-frame signal available once ffmpeg reads the file itself.
+        /// </summary>
+        public static string IntermediateInputArgs(string path) =>
+            $"-y -nostats -nostdin -progress pipe:1 -i \"{path}\" ";
 
         /// <summary>
         /// Builds a full-frame straight-RGBA background buffer for compositing at export time:

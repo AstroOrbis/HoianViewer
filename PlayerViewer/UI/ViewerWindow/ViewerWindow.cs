@@ -120,13 +120,16 @@ namespace PlayerViewer.UI
             _animMode = config.AnimMode == 1 ? 1 : 0;
 
             //Background now lives on the player config (travels with presets); clamp on load.
-            config.Player.Background ??= new Core.BackgroundConfig();
-            config.Player.Background.Normalize();
+            config.Normalize();
         }
 
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
+
+            Console.WriteLine(
+                $"[GL] {GL.GetString(StringName.Renderer)} ({GL.GetString(StringName.Vendor)})"
+            );
 
             //Anchor Toolbox's Shaders/Plugins/Hashes lookups to the exe directory. Its default
             //comes from Assembly.Location, which is empty under single-file publish and would null
@@ -370,6 +373,8 @@ namespace PlayerViewer.UI
                 _config.WindowHeight = Height;
             }
             _config.Save();
+            //Save only marks the config dirty; write it out before the process goes away.
+            _config.Flush();
             base.OnClosed(e);
         }
 
@@ -433,6 +438,8 @@ namespace PlayerViewer.UI
             //Frame-exact export: capture this frame synchronously, then advance the timeline.
             if (_animExporting)
                 CaptureAnimExportFrame();
+
+            _config.FlushPending();
         }
     }
 }

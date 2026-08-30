@@ -57,17 +57,28 @@ namespace PlayerViewer.UI
             if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 return;
 
+            PlayerConfig preset;
             try
             {
-                var preset = JsonConvert.DeserializeObject<PlayerConfig>(File.ReadAllText(path));
-                if (preset == null)
-                {
-                    _presetStatus = "Not a valid preset file";
-                    return;
-                }
+                preset = JsonConvert.DeserializeObject<PlayerConfig>(File.ReadAllText(path));
+            }
+            catch (Exception ex)
+            {
+                _presetStatus = $"Not a valid preset file: {ex.Message}";
+                Console.WriteLine($"[UI] Preset parse failed: {ex.Message}");
+                return;
+            }
+            if (preset == null)
+            {
+                _presetStatus = "Not a valid preset file";
+                return;
+            }
 
+            try
+            {
                 //Adopt the preset as the current config and apply it. Gear rows missing from
                 //the loaded game resolve to blank slots inside RestorePlayerConfig.
+                preset.Normalize();
                 _config.Player = preset;
                 RestorePlayerConfig();
                 SavePlayerConfig();

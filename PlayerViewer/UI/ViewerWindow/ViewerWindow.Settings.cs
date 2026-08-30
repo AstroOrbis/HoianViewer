@@ -58,9 +58,9 @@ namespace PlayerViewer.UI
             if (_config.TrimDeadspace)
                 ImGui.TextColored(
                     Theme.Gold,
-                    "Note: trimmed animation export buffers every frame "
-                        + "to a temp file on disk first; transiently uses ~width×height×4×frames of space, "
-                        + "times the supersample factor squared (several GB at 4K, tens of GB with high supersample)."
+                    "Note: the crop is only known once every frame has been seen, so a trimmed "
+                        + "animation export writes a lossless intermediate to disk first and re-encodes "
+                        + "it. Transiently uses a few hundred MB, more at 4K."
                 );
 
             Widgets.SectionHeader("WebP / WebM quality");
@@ -119,16 +119,26 @@ namespace PlayerViewer.UI
                 "%dx"
             );
 
-            int ss = _config.ExportSupersample;
-            Widgets.DimText(
-                $"A 1080p export renders {1920 * ss}x{1080 * ss} internally ({ss * ss}x the pixels)."
-            );
-            if (ss >= 8)
+            //The factor multiplies the render target, which has to fit the driver's
+            //texture/renderbuffer limit.
+            int wantSs = _config.ExportSupersample;
+            var (_, capW, capH) = CaptureSizes[_captureRes];
+            int ss = ScenePipeline.ClampSupersample(wantSs, capW, capH);
+            Widgets.DimText($"Renders {capW * ss}x{capH * ss} per frame, saves {capW}x{capH}.");
+            if (_config.TrimDeadspace)
+                Widgets.DimText("Trim is on, so that saved size is an upper bound.");
+
+            if (ss < wantSs)
+                Widgets.ErrorText(
+                    $"This GPU caps render targets at {ScenePipeline.MaxTargetSize}px, so a "
+                        + $"{capW}x{capH} export uses supersample {ss}x."
+                );
+            else if (ss >= 8)
                 Widgets.ErrorText("8x is extreme: may exhaust GPU memory at 4K");
             else if (ss > 4)
                 ImGui.TextColored(
                     Theme.Gold,
-                    "High supersample: large GPU memory & temp-disk use (grows with the square of the factor)"
+                    "Large GPU memory use (grows with the square of the factor)"
                 );
 
             Widgets.SectionHeader("Physics warm-up");

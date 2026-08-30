@@ -7,7 +7,16 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -19,13 +28,13 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore
-        run: dotnet restore PlayerViewer/PlayerViewer.csproj
+        run: dotnet restore PlayerViewer/PlayerViewer.csproj -r ${{ matrix.rid }}
 
       - name: Publish
         run: >
           dotnet publish PlayerViewer/PlayerViewer.csproj
           -c Release
-          -r win-x64
+          -r ${{ matrix.rid }}
           --self-contained true
           -p:PublishSingleFile=true
           -o publish
@@ -33,6 +42,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PlayerViewer-win-x64
+          name: PlayerViewer-${{ matrix.rid }}
           path: publish
           if-no-files-found: error

@@ -21,7 +21,7 @@ namespace BfresEditor
         public static readonly System.Diagnostics.Stopwatch TotalTime = new System.Diagnostics.Stopwatch();
         public static int LoadCount = 0;
 
-        const int CacheVersion = 3;
+        const int CacheVersion = 4;
         static bool _cacheVersionChecked;
 
         public static string CacheDir = "ShaderCache";
@@ -124,7 +124,9 @@ namespace BfresEditor
             if (yFlipSamplers == null || yFlipSamplers.Count == 0) return fragSource;
 
             var sb = new StringBuilder();
-            foreach (var line in fragSource.Split('\n'))
+            //Normalize first: the translator emits CRLF, so splitting on '\n' alone leaves a
+            //trailing '\r' on every line and AppendLine then writes a second line break.
+            foreach (var line in fragSource.ReplaceLineEndings("\n").Split('\n'))
             {
                 string patched = line;
                 foreach (var sampler in yFlipSamplers)
@@ -341,7 +343,9 @@ namespace BfresEditor
 
             var builder = new StringBuilder();
 
-            var lines = code.Split('\n');
+            //Normalize first: see the note in PatchSamplerYFlip. These passes chain, so an
+            //unnormalized split here would stack another line break on top of the previous pass.
+            var lines = code.ReplaceLineEndings("\n").Split('\n');
             int numLines = 0;
             foreach (var line in lines) {
                 if (!writtenExtraUniforms && line.Contains("const int undef = 0;")) {
@@ -439,7 +443,7 @@ namespace BfresEditor
 
             // Strip layout(binding=N) from sampler declarations so glUniform1i can assign texture units.
             var sb = new StringBuilder();
-            foreach (var line in translated.Split('\n'))
+            foreach (var line in translated.ReplaceLineEndings("\n").Split('\n'))
             {
                 if (line.Contains("uniform sampler") || line.Contains("uniform usampler") ||
                     line.Contains("uniform isampler"))

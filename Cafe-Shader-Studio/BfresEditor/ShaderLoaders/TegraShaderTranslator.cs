@@ -1,4 +1,4 @@
-using Ryujinx.Graphics.Shader;
+﻿using Ryujinx.Graphics.Shader;
 using Ryujinx.Graphics.Shader.Translation;
 using System;
 using System.IO;
@@ -33,9 +33,9 @@ namespace BfresEditor
                 _data = data;
             }
 
-            public T MemoryRead<T>(ulong address) where T : unmanaged
+            public ReadOnlySpan<ulong> GetCode(ulong address, int minimumSize)
             {
-                return MemoryMarshal.Cast<byte, T>(new ReadOnlySpan<byte>(_data).Slice((int)address))[0];
+                return MemoryMarshal.Cast<byte, ulong>(new ReadOnlySpan<byte>(_data).Slice((int)address));
             }
 
               public int QueryHostStorageBufferOffsetAlignment() => _storageBufferOffsetAlignment.Value;
@@ -65,10 +65,10 @@ namespace BfresEditor
 
         public static string Translate(byte[] data)
         {
-            TranslationFlags flags = TranslationFlags.DebugMode;
+            var options = new TranslationOptions(
+                TargetLanguage.Glsl, TargetApi.OpenGL, TranslationFlags.DebugMode);
 
-            return Translator.CreateContext(0,
-                 new GpuAccessor(data), flags).Translate(out _).Code;
+            return Translator.CreateContext(0, new GpuAccessor(data), options).Translate().Code;
         }
 
         private static int GetLimit(All name)

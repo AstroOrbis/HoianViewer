@@ -8,6 +8,28 @@
     <AssemblyName>PlayerViewer</AssemblyName>
     <RootNamespace>PlayerViewer</RootNamespace>
     <CssRoot>..\Cafe-Shader-Studio</CssRoot>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Set true to keep debug symbols and XML doc files in the publish output.
+         Turn on with: dotnet publish -p:PublishDebugFiles=true -->
+    <PublishDebugFiles>false</PublishDebugFiles>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="UI\Shaders\Resolve.vert" />
+    <EmbeddedResource Include="UI\Shaders\Resolve.frag" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == ''">
+    <ShipWindowsNatives>true</ShipWindowsNatives>
+    <ShipLinuxNatives>true</ShipLinuxNatives>
+    <ShipOsxNatives>true</ShipOsxNatives>
+    <TargetsWindows Condition="'$(OS)' == 'Windows_NT'">true</TargetsWindows>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <ShipWindowsNatives Condition="$(RuntimeIdentifier.StartsWith('win'))">true</ShipWindowsNatives>
+    <ShipLinuxNatives Condition="$(RuntimeIdentifier.StartsWith('linux'))">true</ShipLinuxNatives>
+    <ShipOsxNatives Condition="$(RuntimeIdentifier.StartsWith('osx'))">true</ShipOsxNatives>
+    <TargetsWindows Condition="$(RuntimeIdentifier.StartsWith('win'))">true</TargetsWindows>
   </PropertyGroup>
 
   <!-- Opt-in automatic Tracy profiling: build with `-p:Tracy=true`. Compiles the runtime shim
@@ -35,20 +57,18 @@
     <Reference Include="Syroot.NintenTools.NSW.Bntx">
       <HintPath>$(CssRoot)\BfresEditor\Lib\Syroot.NintenTools.NSW.Bntx.dll</HintPath>
     </Reference>
-    <Reference Include="Toolbox.Core">
-      <HintPath>$(CssRoot)\CafeShaderStudio\Lib\Toolbox.Core.dll</HintPath>
-    </Reference>
+    <ProjectReference Include="$(CssRoot)\Toolbox.Core\Toolbox.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
-    <!-- Transitive runtime dep of the vendored Toolbox.Core.dll (was shipped as a loose Lib DLL). -->
+    <!-- Transitive runtime dep of Toolbox.Core. -->
     <PackageReference Include="SharpYaml" Version="1.6.5" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+  <ItemGroup Condition="'$(TargetsWindows)' == 'true'">
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
     <PackageReference Include="Microsoft.Win32.SystemEvents" Version="8.0.0" />
   </ItemGroup>
@@ -71,6 +91,7 @@
       Include="$(CssRoot)\CafeShaderStudio\Resources\**\*.*"
       LinkBase="Resources"
       CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="Never"
     />
     <!-- ImGuiController loads fonts from Lib/ relative to the exe. -->
     <Content
@@ -87,6 +108,7 @@
       Include="$(CssRoot)\CafeShaderStudio\cimgui.dll"
       Link="cimgui.dll"
       CopyToOutputDirectory="PreserveNewest"
+      Condition="'$(ShipWindowsNatives)' == 'true'"
     />
     <!-- Cross-platform ImGui natives (repo ships .so/.dylib). Copied under both the plain and
          lib-prefixed names so the .NET loader finds cimgui however it probes. -->
@@ -94,32 +116,32 @@
       Include="$(CssRoot)\CafeShaderStudio\cimgui.so"
       Link="cimgui.so"
       CopyToOutputDirectory="PreserveNewest"
-      Condition="Exists('$(CssRoot)\CafeShaderStudio\cimgui.so')"
+      Condition="'$(ShipLinuxNatives)' == 'true' And Exists('$(CssRoot)\CafeShaderStudio\cimgui.so')"
     />
     <Content
       Include="$(CssRoot)\CafeShaderStudio\cimgui.dylib"
       Link="cimgui.dylib"
       CopyToOutputDirectory="PreserveNewest"
-      Condition="Exists('$(CssRoot)\CafeShaderStudio\cimgui.dylib')"
+      Condition="'$(ShipOsxNatives)' == 'true' And Exists('$(CssRoot)\CafeShaderStudio\cimgui.dylib')"
     />
     <!-- Native file dialogs (tinyfiledialogs.dll is the x64 build). -->
     <Content
       Include="$(CssRoot)\CafeShaderStudio\tinyfiledialogs.dll"
       Link="tinyfiledialogs.dll"
       CopyToOutputDirectory="PreserveNewest"
-      Condition="Exists('$(CssRoot)\CafeShaderStudio\tinyfiledialogs.dll')"
+      Condition="'$(ShipWindowsNatives)' == 'true' And Exists('$(CssRoot)\CafeShaderStudio\tinyfiledialogs.dll')"
     />
     <Content
       Include="$(CssRoot)\CafeShaderStudio\tinyfiledialogs.so"
       Link="tinyfiledialogs.so"
       CopyToOutputDirectory="PreserveNewest"
-      Condition="Exists('$(CssRoot)\CafeShaderStudio\tinyfiledialogs.so')"
+      Condition="'$(ShipLinuxNatives)' == 'true' And Exists('$(CssRoot)\CafeShaderStudio\tinyfiledialogs.so')"
     />
     <Content
       Include="$(CssRoot)\CafeShaderStudio\tinyfiledialogs.dylib"
       Link="tinyfiledialogs.dylib"
       CopyToOutputDirectory="PreserveNewest"
-      Condition="Exists('$(CssRoot)\CafeShaderStudio\tinyfiledialogs.dylib')"
+      Condition="'$(ShipOsxNatives)' == 'true' And Exists('$(CssRoot)\CafeShaderStudio\tinyfiledialogs.dylib')"
     />
   </ItemGroup>
 
@@ -144,28 +166,19 @@
       SkipUnchangedFiles="true"
       Condition="Exists('$(OutDir)BfresEditor.dll')"
     />
-    <!-- PluginManager reads its own assembly from disk (ExecutableDir\Toolbox.Core.dll) to scan
-         built-in formats. Single-file bundles it into the exe, so drop a loose copy beside the exe;
-         the runtime still loads the bundled one, this is only for the scanner. -->
-    <Copy
-      SourceFiles="$(OutDir)Toolbox.Core.dll"
-      DestinationFiles="$(PublishDir)Toolbox.Core.dll"
-      SkipUnchangedFiles="true"
-      Condition="Exists('$(OutDir)Toolbox.Core.dll') And !Exists('$(PublishDir)Toolbox.Core.dll')"
-    />
   </Target>
 
   <!-- Also drop cimgui under the lib-prefixed name in case the loader probes libcimgui.so
        (the plain-name copies above cover the other probe order). -->
   <Target Name="CopyNativeImGuiBuild" AfterTargets="Build">
     <Copy
-      Condition="Exists('$(CssRoot)\CafeShaderStudio\cimgui.so')"
+      Condition="'$(ShipLinuxNatives)' == 'true' And Exists('$(CssRoot)\CafeShaderStudio\cimgui.so')"
       SourceFiles="$(CssRoot)\CafeShaderStudio\cimgui.so"
       DestinationFiles="$(OutDir)libcimgui.so"
       SkipUnchangedFiles="true"
     />
     <Copy
-      Condition="Exists('$(CssRoot)\CafeShaderStudio\cimgui.dylib')"
+      Condition="'$(ShipOsxNatives)' == 'true' And Exists('$(CssRoot)\CafeShaderStudio\cimgui.dylib')"
       SourceFiles="$(CssRoot)\CafeShaderStudio\cimgui.dylib"
       DestinationFiles="$(OutDir)libcimgui.dylib"
       SkipUnchangedFiles="true"
@@ -173,16 +186,76 @@
   </Target>
   <Target Name="CopyNativeImGuiPublish" AfterTargets="Publish">
     <Copy
-      Condition="Exists('$(CssRoot)\CafeShaderStudio\cimgui.so')"
+      Condition="'$(ShipLinuxNatives)' == 'true' And Exists('$(CssRoot)\CafeShaderStudio\cimgui.so')"
       SourceFiles="$(CssRoot)\CafeShaderStudio\cimgui.so"
       DestinationFiles="$(PublishDir)libcimgui.so"
       SkipUnchangedFiles="true"
     />
     <Copy
-      Condition="Exists('$(CssRoot)\CafeShaderStudio\cimgui.dylib')"
+      Condition="'$(ShipOsxNatives)' == 'true' And Exists('$(CssRoot)\CafeShaderStudio\cimgui.dylib')"
       SourceFiles="$(CssRoot)\CafeShaderStudio\cimgui.dylib"
       DestinationFiles="$(PublishDir)libcimgui.dylib"
       SkipUnchangedFiles="true"
+    />
+  </Target>
+
+  <!-- Runs after bundling, so the resource tree lands on disk beside the exe where the app reads
+       it, whatever the bundler decided to do with the individual files. -->
+  <Target Name="CopyResourcesPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <PublishResourceFile Include="$(CssRoot)\CafeShaderStudio\Resources\**\*.*" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(PublishResourceFile)"
+      DestinationFiles="@(PublishResourceFile->'$(PublishDir)Resources\%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true"
+    />
+  </Target>
+
+  <!-- On Windows with multiple GPUs, GPU is picked by reading the NvOptimusEnablement and
+       AmdPowerXpressRequestHighPerformance symbols from the executable's export table. A .NET
+       apphost cannot export them at compile time, so nvpatch adds them to the built exe. Without
+       this a PC/laptop with an integrated and dedicated GPU runs the viewer on the integrated GPU, which is
+       stinky. We want to express preference to run on dedicated GPU, so we patch the built exe to export.
+
+       nvpatch is vendored in tools/nvpatch so a `dotnet tool restore` is not necessary. 
+       The vendored copy carries one fix: upstream sorts export names with the default comparator, 
+       but the PE format wants an ordinal sort because GetProcAddress binary searches that table. 
+       On singlefilehost, which had a bunch of other symbols, that left NvOptimusEnablement sorted past
+       them and a single file build wouldn't properly target the dedicated GPU. -->
+  <Target
+    Name="EnableDiscreteGpu"
+    AfterTargets="Build"
+    Condition="'$(TargetsWindows)' == 'true' And Exists('$(TargetDir)$(TargetName).exe')"
+  >
+    <Exec
+      Command="dotnet run --project &quot;$(MSBuildThisFileDirectory)..\tools\nvpatch\nvpatch.csproj&quot; -c Release -- --enable &quot;$(TargetDir)$(TargetName).exe&quot;"
+      ContinueOnError="WarnAndContinue"
+    />
+  </Target>
+  <Target
+    Name="TrimPublishOutput"
+    AfterTargets="Publish"
+  >
+    <ItemGroup>
+      <!-- .NET Framework assembly binding redirects, inherited from the vendored projects.
+           .NET Core resolves through deps.json and never reads these. Verified by removing them:
+           the app starts and loads models exactly as before. -->
+      <PublishJunk Include="$(PublishDir)*.dll.config" />
+      <PublishJunk Include="$(PublishDir)*.pdb" Condition="'$(PublishDebugFiles)' != 'true'" />
+      <PublishJunk Include="$(PublishDir)*.xml" Condition="'$(PublishDebugFiles)' != 'true'" />
+    </ItemGroup>
+    <Delete Files="@(PublishJunk)" />
+  </Target>
+
+  <Target
+    Name="EnableDiscreteGpuPublish"
+    AfterTargets="Publish"
+    Condition="'$(TargetsWindows)' == 'true'"
+  >
+    <Exec
+      Command="dotnet run --project &quot;$(MSBuildThisFileDirectory)..\tools\nvpatch\nvpatch.csproj&quot; -c Release -- --enable &quot;$(PublishDir)$(TargetName).exe&quot;"
+      ContinueOnError="WarnAndContinue"
     />
   </Target>
 </Project>
