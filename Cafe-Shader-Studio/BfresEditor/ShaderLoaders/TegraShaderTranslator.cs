@@ -63,12 +63,20 @@ namespace BfresEditor
             _ = _gpuVendor.Value;
         }
 
-        public static string Translate(byte[] data)
+        /// <summary>
+        /// Translates a vertex and pixel shader pair together.
+        /// </summary>
+        public static (string Vertex, string Pixel) TranslatePair(byte[] vertexData, byte[] pixelData)
         {
             var options = new TranslationOptions(
                 TargetLanguage.Glsl, TargetApi.OpenGL, TranslationFlags.DebugMode);
 
-            return Translator.CreateContext(0, new GpuAccessor(data), options).Translate().Code;
+            var vertex = Translator.CreateContext(0, new GpuAccessor(vertexData), options);
+            var pixel = Translator.CreateContext(0, new GpuAccessor(pixelData), options);
+
+            vertex.SetNextStage(pixel);
+
+            return (vertex.Translate().Code, pixel.Translate().Code);
         }
 
         private static int GetLimit(All name)

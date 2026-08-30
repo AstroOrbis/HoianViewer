@@ -104,7 +104,7 @@ namespace PlayerViewer.UI
                 }
             }
 
-            if (_viewportHovered && io.MouseWheel != 0)
+            if (_viewportHovered && Focused && io.MouseWheel != 0)
             {
                 cam.TargetDistance = Math.Max(
                     0.05f,

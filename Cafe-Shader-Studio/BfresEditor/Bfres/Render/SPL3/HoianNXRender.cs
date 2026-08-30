@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.IO;
@@ -51,6 +51,13 @@ namespace BfresEditor
             TeamBravoColor = ReadVec3(User3Data, 7 * 16);
             TeamCharlieColor = ReadVec3(User3Data, 14 * 16);
         }
+
+        /// <summary>
+        /// Set PV_SHADER_DEBUG=1 to log per material shader option sets, resolved program
+        /// passes and every sampler binding. Very verbose.
+        /// </summary>
+        public static readonly bool DebugMaterials =
+            Environment.GetEnvironmentVariable("PV_SHADER_DEBUG") == "1";
 
         public override bool UseRenderer(FMAT material, string archive, string model)
         {
@@ -256,11 +263,6 @@ namespace BfresEditor
 
         #region Shader archive lookup
 
-        //Archive resolution result per (shader file, shader model). The full search
-        //below hits the filesystem (Directory.GetFiles) and rebuilds candidate lists
-        //for every mesh of every model, which adds up to hundreds of ms per model.
-        static readonly Dictionary<string, BfshaLibrary.BfshaFile> _archiveLookupCache = new();
-
         static System.Threading.Tasks.Task _prewarmTask;
 
         /// <summary>
@@ -288,44 +290,62 @@ namespace BfresEditor
             });
         }
 
-        public override BfshaLibrary.BfshaFile TryLoadShaderArchive(BFRES bfres, string shaderFile, string shaderModel)
+        /// <summary>
+        /// Loads the material renderer, choosing between the shader archives that can
+        /// serve this material.
+        ///
+        /// An archive shipped with the model wins over the game one, but only if it can
+        /// actually draw the material.
+        /// </summary>
+        public override void TryLoadShader(BFRES bfres, FMDL fmdl, FSHP mesh, BfresMeshAsset meshAsset)
         {
-            //If a background prewarm is in flight, wait for it: GlobalShaderCache is
-            //not safe to mutate concurrently, and the archive is needed here anyway.
-            _prewarmTask?.Wait();
-            //Player/gear models all resolve to the game-level shader archives, so the
-            //result is independent of the bfres once the global cache is primed.
-            //Models that embed their own shader archive (or ship inside a pack) must
-            //bypass the memo since their archive is file-specific.
-            bfres.UpdateExternalShaderFiles();
-            bool fileSpecific = bfres.ShaderFiles.Count > 0 || bfres.FileInfo.ParentArchive != null;
+            ArchiveTime.Start();
+            var archives = EnumerateArchives(bfres, mesh.Material.ShaderArchive).ToList();
+            ArchiveTime.Stop();
 
-            string memoKey = $"{shaderFile}|{shaderModel}";
-            if (!fileSpecific && _archiveLookupCache.TryGetValue(memoKey, out var memo))
-                return memo;
+            BfshaLibrary.ShaderModel chosen = null;
+            foreach (var (source, bfsha) in archives)
+            {
+                var model = bfsha.ShaderModels.Values.FirstOrDefault(x => x.Name == mesh.Material.ShaderModel);
+                if (model == null)
+                    continue;
 
-            var result = TryLoadShaderArchiveUncached(bfres, shaderFile, shaderModel);
-            if (result != null && !fileSpecific)
-                _archiveLookupCache[memoKey] = result;
-            return result;
+                chosen ??= model;
+
+                ShaderModel = model;
+                if (model.GetProgramIndex(BuildOptions(mesh.Material, meshAsset)) == -1)
+                    continue;
+
+                chosen = model;
+                if (DebugMaterials)
+                    Console.WriteLine($"[SPL3dbg] material '{mesh.Material.Name}' archive "
+                        + $"'{bfsha.Name}' from {source} ({archives.Count} candidate(s))");
+                break;
+            }
+
+            if (chosen == null)
+                return;
+
+            OnLoadTime.Start();
+            OnLoad(chosen, fmdl, mesh, meshAsset);
+            OnLoadTime.Stop();
         }
 
-        BfshaLibrary.BfshaFile TryLoadShaderArchiveUncached(BFRES bfres, string shaderFile, string shaderModel)
+        /// <summary>
+        /// Shader archives that could serve a material, most specific source first:
+        /// embedded in this BFRES, then its parent pack, then a Shader folder next to
+        /// (or above) the model, then the configured game path.
+        /// </summary>
+        IEnumerable<(string Source, BfshaLibrary.BfshaFile Archive)> EnumerateArchives(
+            BFRES bfres, string shaderFile)
         {
-            //Search existing sources first (external files, global shader cache, parent archive)
-            var candidates = new List<BfshaLibrary.BfshaFile>();
+            _prewarmTask?.Wait();
 
             bfres.UpdateExternalShaderFiles();
             foreach (var file in bfres.ShaderFiles)
             {
-                if (file is BfshaLibrary.BfshaFile bfsha && bfsha.Name.Contains(shaderFile))
-                    candidates.Add(bfsha);
-            }
-
-            foreach (var file in GlobalShaderCache.ShaderFiles.Values)
-            {
-                if (file is BfshaLibrary.BfshaFile bfsha && bfsha.Name.Contains(shaderFile))
-                    candidates.Add(bfsha);
+                if (file is BfshaLibrary.BfshaFile bfsha)
+                    yield return ("bfres", bfsha);
             }
 
             var archiveFile = bfres.FileInfo.ParentArchive;
@@ -333,50 +353,57 @@ namespace BfresEditor
             {
                 foreach (var file in archiveFile.Files)
                 {
-                    if (file.FileName.Contains(shaderFile))
-                    {
-                        if (file.FileFormat == null)
-                            file.FileFormat = file.OpenFile();
-                        if (file.FileFormat is BFSHA bfshaFormat)
-                            candidates.Add(bfshaFormat.BfshaFile);
-                    }
+                    if (!file.FileName.Contains(shaderFile))
+                        continue;
+                    if (file.FileFormat == null)
+                        file.FileFormat = file.OpenFile();
+                    if (file.FileFormat is BFSHA bfshaFormat)
+                        yield return ("pack", bfshaFormat.BfshaFile);
                 }
             }
 
-            //Search the game files: a Shader folder next to (or above) the model, or the configured game path.
             foreach (var shaderDir in GetShaderSearchDirs(bfres))
             {
-                if (!Directory.Exists(shaderDir))
-                    continue;
-
-                //Prefer the main Product archive over the cutscene (Eve) archive.
-                var files = Directory.GetFiles(shaderDir)
-                    .Where(x => Path.GetFileName(x).StartsWith(shaderFile) &&
-                               (x.EndsWith(".bfsha") || x.EndsWith(".bfsha.zs")))
-                    .OrderBy(x => Path.GetFileName(x).Contains(".Product.") ? 0 : 1)
-                    .ToList();
-
-                foreach (var file in files)
+                foreach (var file in FindArchiveFiles(shaderDir, shaderFile))
                 {
                     var bfsha = LoadArchiveFile(file);
                     if (bfsha != null)
-                        candidates.Add(bfsha);
+                        yield return (shaderDir, bfsha);
                 }
+            }
+        }
 
-                if (candidates.Count > 0)
-                    break;
+        static readonly Dictionary<string, string[]> _archiveFileCache = new();
+
+        static string[] FindArchiveFiles(string shaderDir, string shaderFile)
+        {
+            string key = $"{shaderDir}|{shaderFile}";
+            if (_archiveFileCache.TryGetValue(key, out var cached))
+                return cached;
+
+            string[] files = Array.Empty<string>();
+            if (Directory.Exists(shaderDir))
+            {
+                //Prefer the main Product archive over the cutscene (Eve) archive.
+                files = Directory.GetFiles(shaderDir)
+                    .Where(x => Path.GetFileName(x).StartsWith(shaderFile) &&
+                               (x.EndsWith(".bfsha") || x.EndsWith(".bfsha.zs")))
+                    .OrderBy(x => Path.GetFileName(x).Contains(".Product.") ? 0 : 1)
+                    .ToArray();
             }
 
-            if (candidates.Count == 0)
-                return null;
+            _archiveFileCache[key] = files;
+            return files;
+        }
 
-            //Prefer an archive that actually contains the requested shader model.
-            foreach (var bfsha in candidates)
+        public override BfshaLibrary.BfshaFile TryLoadShaderArchive(BFRES bfres, string shaderFile, string shaderModel)
+        {
+            foreach (var (_, bfsha) in EnumerateArchives(bfres, shaderFile))
             {
                 if (bfsha.ShaderModels.FirstOrDefault(x => x.Name == shaderModel) != null)
                     return bfsha;
             }
-            return candidates[0];
+            return null;
         }
 
         static IEnumerable<string> GetShaderSearchDirs(BFRES bfres)
@@ -460,63 +487,36 @@ namespace BfresEditor
             }
         }
 
+        /// <summary>
+        /// The shader option set used to look up a program: the material's own options, the
+        /// ones the engine derives from its render state, and the dynamic ones it writes per
+        /// draw.
+        /// </summary>
+        Dictionary<string, string> BuildOptions(FMAT mat, BfresMeshAsset mesh)
+        {
+            var options = GsysShaderOptions.BuildStaticOptions(mat.Material);
+            GsysShaderOptions.AddDynamicOptions(options, mesh.Shape.VertexSkinCount,
+                GsysShaderOptions.AssignTypes[0]);
+            return options;
+        }
+
+        static readonly string[] RenderPasses =
+        {
+            "gsys_assign_material",
+            "gsys_assign_zonly",
+            "gsys_assign_gbuffer",
+        };
+
         public override void ReloadProgram(BfresMeshAsset mesh)
         {
             var mat = mesh.Shape.Material;
 
             ProgramPasses.Clear();
 
-            //Collect the material's shader options.
-            Dictionary<string, string> options = new Dictionary<string, string>();
-            foreach (var op in mat.ShaderOptions)
-            {
-                string choice = op.Value;
-                if (choice == "<Default Value>")
-                    continue;
-                if (choice == "True") choice = "1";
-                else if (choice == "False") choice = "0";
-                options[op.Key] = choice;
-            }
+            var options = BuildOptions(mat, mesh);
 
-            this.LoadRenderStateOptions(options, mat);
-
-            // The game seems to derive this from the assigned samplers; materials often leave it
-            // at <Default Value>. Without the constraint the lenient search can pick a
-            // variant with the albedo fetch compiled out, rendering the mesh white.
-            if (!options.ContainsKey("enable_albedo_tex") && HasAssignedTexture(mat, "_a0"))
-                options["enable_albedo_tex"] = "1";
-
-            // The game seems to derive gsys_display_face_type from the display face render info.
-            // Without it the exact key lookup misses and the lenient search can land on
-            // a variant with extra features baked in (e.g. reflector sheen on fabric).
-            if (!options.ContainsKey("gsys_display_face_type"))
-            {
-                string face = mat.GetRenderInfo("gsys_render_state_display_face");
-                string faceType = face switch
-                {
-                    "front" => "1",
-                    "back" => "2",
-                    "none" => "3",
-                    _ => null,   //"both" is the default (0)
-                };
-                if (faceType != null)
-                    options["gsys_display_face_type"] = faceType;
-            }
-
-            //Dynamic options set by the engine at runtime.
-            options["gsys_weight"] = mesh.Shape.VertexSkinCount.ToString();
-
-            //Remove any option names or choices the shader archive does not know;
-            //materials can carry options from a different game version.
-            SanitizeOptions(options);
-
-            // Each gsys_assign_type has its own set of program passes.
-            // The material pass is first so it is used as the default (index 0).
-            // Materials repeat the same option sets across models (skin, gear cloth,
-            // accessories...), so the resolved program indices are memoized; the
-            // lenient fallback scan is O(program count) and Hoian's UBER shader has
-            // tens of thousands of programs.
-            var assignTypeOption = ShaderModel.DynamiOptions["gsys_assign_type"];
+            //Materials repeat the same option sets across models (skin, gear cloth,
+            //accessories...), so the resolved program indices are memoized.
             var passCache = _programPassCache.GetValue(ShaderModel, _ => new Dictionary<string, int[]>());
             string cacheKey = string.Join(";", options.OrderBy(x => x.Key, StringComparer.Ordinal)
                 .Select(x => $"{x.Key}={x.Value}"));
@@ -524,26 +524,26 @@ namespace BfresEditor
             if (!passCache.TryGetValue(cacheKey, out int[] passIndices))
             {
                 var indices = new List<int>();
-                if (assignTypeOption != null)
+                for (int pass = 0; pass < RenderPasses.Length; pass++)
                 {
-                    var choices = assignTypeOption.ChoiceDict.GetKeys()
-                        .Where(x => !string.IsNullOrEmpty(x))
-                        .OrderBy(x => x == "gsys_assign_material" ? 0 : 1)
-                        .ToList();
+                    string assignType = GetValidAssignType(RenderPasses[pass]);
+                    options["gsys_assign_type"] = assignType;
 
-                    foreach (var choice in choices)
-                    {
-                        options["gsys_assign_type"] = choice;
-                        int programIndex = ShaderModel.GetProgramIndex(options);
-                        if (programIndex != -1)
-                            indices.Add(programIndex);
-                    }
-                }
-                else
-                {
                     int programIndex = ShaderModel.GetProgramIndex(options);
-                    if (programIndex >= 0)
-                        indices.Add(programIndex);
+                    if (DebugMaterials)
+                        Console.WriteLine($"[SPL3dbg]   assign {assignType} -> {programIndex}");
+
+                    //Pass 0 is the visible draw. Later passes must keep their index, so the
+                    //list stops at the first one that has no program rather than shifting.
+                    if (programIndex == -1)
+                    {
+                        if (pass == 0)
+                            Console.WriteLine($"[SPL3] Material '{mat.Name}': no "
+                                + $"{assignType} program for its option set.");
+                        break;
+                    }
+
+                    indices.Add(programIndex);
                 }
                 passIndices = indices.ToArray();
                 passCache[cacheKey] = passIndices;
@@ -552,45 +552,66 @@ namespace BfresEditor
             foreach (int programIndex in passIndices)
                 this.ProgramPasses.Add(ShaderModel.GetShaderProgram(programIndex));
 
-            if (ProgramPasses.Count == 0)
-                Console.WriteLine($"[SPL3] No shader program matched material '{mat.Name}'.");
+            if (DebugMaterials)
+            {
+                Console.WriteLine($"[SPL3dbg] material '{mat.Name}' model '{ShaderModel.Name}' "
+                    + $"({ShaderModel.ProgramCount} programs) passes [{string.Join(",", passIndices)}]");
+                Console.WriteLine($"[SPL3dbg]   options {cacheKey}");
+                if (ProgramPasses.Count > 0)
+                {
+                    var blocks = new List<string>();
+                    for (int i = 0; i < ShaderModel.UniformBlocks.Count; i++)
+                    {
+                        var loc = ProgramPasses[0].UniformBlockLocations[i];
+                        if (loc.VertexLocation == -1 && loc.FragmentLocation == -1)
+                            continue;
+                        blocks.Add($"{ShaderModel.UniformBlocks.GetKey(i)}"
+                            + $"(vp_c{loc.VertexLocation + 3}/fp_c{loc.FragmentLocation + 3}"
+                            + $" size={ShaderModel.UniformBlocks[i].Size})");
+                    }
+                    Console.WriteLine($"[SPL3dbg]   blocks {string.Join(" ", blocks)}");
+
+                    var samplers = new List<string>();
+                    for (int i = 0; i < ShaderModel.Samplers.Count; i++)
+                    {
+                        var loc = ProgramPasses[0].SamplerLocations[i];
+                        if (loc.VertexLocation == -1 && loc.FragmentLocation == -1)
+                            continue;
+                        samplers.Add($"{ShaderModel.Samplers.GetKey(i)}="
+                            + (loc.FragmentLocation != -1
+                                ? ConvertSamplerID(loc.FragmentLocation)
+                                : ConvertSamplerID(loc.VertexLocation, true)));
+                    }
+                    Console.WriteLine($"[SPL3dbg]   samplerUniforms {string.Join(" ", samplers)}");
+                }
+                foreach (var kv in mat.Material.ShaderAssign.SamplerAssigns)
+                {
+                    var texMap = mat.TextureMaps.FirstOrDefault(x => x.Sampler == kv.Value.String);
+                    Console.WriteLine($"[SPL3dbg]   sampler {kv.Key} -> {kv.Value.String} "
+                        + $"-> {(texMap == null ? "<no texture map>" : texMap.Name)}");
+                }
+            }
         }
 
-        static bool HasAssignedTexture(FMAT mat, string sampler)
-        {
-            if (!mat.Material.ShaderAssign.SamplerAssigns.ContainsKey(sampler))
-                return false;
-
-            string resSampler = mat.Material.ShaderAssign.SamplerAssigns[sampler].String;
-            return mat.TextureMaps.Any(x => x.Sampler == resSampler);
-        }
-
-        //Valid option/choice sets per shader model
+        //Assign type choices the current archive declares, per shader model.
         static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BfshaLibrary.ShaderModel,
-            Dictionary<string, HashSet<string>>> _validChoicesCache = new();
+            HashSet<string>> _assignTypeCache = new();
+
+        string GetValidAssignType(string assignType)
+        {
+            var available = _assignTypeCache.GetValue(ShaderModel, model =>
+            {
+                var option = model.DynamiOptions["gsys_assign_type"];
+                return option == null
+                    ? new HashSet<string>()
+                    : new HashSet<string>(option.ChoiceDict.GetKeys().Where(x => !string.IsNullOrEmpty(x)));
+            });
+            return GsysShaderOptions.GetValidAssignType(assignType, available);
+        }
 
         //Option set -> resolved program indices, per shader model.
         static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BfshaLibrary.ShaderModel,
             Dictionary<string, int[]>> _programPassCache = new();
-
-        void SanitizeOptions(Dictionary<string, string> options)
-        {
-            var validChoices = _validChoicesCache.GetValue(ShaderModel, model =>
-            {
-                var dict = new Dictionary<string, HashSet<string>>();
-                foreach (var so in model.StaticOptions.Values)
-                    dict[so.Name] = new HashSet<string>(so.ChoiceDict.GetKeys());
-                foreach (var dyn in model.DynamiOptions.Values)
-                    dict[dyn.Name] = new HashSet<string>(dyn.ChoiceDict.GetKeys());
-                return dict;
-            });
-
-            foreach (var key in options.Keys.ToList())
-            {
-                if (!validChoices.TryGetValue(key, out var choices) || !choices.Contains(options[key]))
-                    options.Remove(key);
-            }
-        }
 
         #endregion
 
@@ -658,6 +679,23 @@ namespace BfresEditor
             return patched;
         }
 
+        //Default choice per option name, for options a material does not set.
+        static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BfshaLibrary.ShaderModel,
+            Dictionary<string, string>> _defaultChoicesCache = new();
+
+        Dictionary<string, string> GetDefaultChoices()
+        {
+            return _defaultChoicesCache.GetValue(ShaderModel, model =>
+            {
+                var dict = new Dictionary<string, string>();
+                foreach (var so in model.StaticOptions.Values)
+                    dict[so.Name] = so.defaultChoice;
+                foreach (var dyn in model.DynamiOptions.Values)
+                    dict[dyn.Name] = dyn.defaultChoice;
+                return dict;
+            });
+        }
+
         /// <summary>
         /// gsys_shader_option: integer choices of the shader options used by the program.
         /// </summary>
@@ -667,6 +705,7 @@ namespace BfresEditor
 
             byte[] buffer = new byte[blockSize];
             var uniformBlock = ShaderModel.UniformBlocks[blockIndex];
+            var defaults = GetDefaultChoices();
 
             int index = 0;
             foreach (var param in uniformBlock.Uniforms.Values)
@@ -676,8 +715,12 @@ namespace BfresEditor
                 if (offset < 0 || offset + 4 > buffer.Length)
                     continue;
 
-                if (!mat.ShaderOptions.TryGetValue(uniformName, out string option))
-                    continue;
+                if (!mat.ShaderOptions.TryGetValue(uniformName, out string option)
+                    || option == "<Default Value>")
+                {
+                    if (!defaults.TryGetValue(uniformName, out option))
+                        continue;
+                }
 
                 if (option == "True") option = "1";
                 else if (option == "False") option = "0";
@@ -1043,7 +1086,42 @@ namespace BfresEditor
             "_b0",
             "_b1",
             "_ao0",
+            "_op0",
         };
+
+        //The texture target a sampler of this type reads.
+        static TextureTarget? TargetForSamplerType(ActiveUniformType type)
+        {
+            switch (type)
+            {
+                case ActiveUniformType.Sampler2D:
+                case ActiveUniformType.Sampler2DShadow:
+                    return TextureTarget.Texture2D;
+                case ActiveUniformType.Sampler2DArray:
+                case ActiveUniformType.Sampler2DArrayShadow:
+                    return TextureTarget.Texture2DArray;
+                case ActiveUniformType.SamplerCube:
+                case ActiveUniformType.SamplerCubeShadow:
+                    return TextureTarget.TextureCubeMap;
+                case ActiveUniformType.SamplerCubeMapArray:
+                    return TextureTarget.TextureCubeMapArray;
+                case ActiveUniformType.Sampler3D:
+                    return TextureTarget.Texture3D;
+                default:
+                    return null;
+            }
+        }
+
+        static readonly HashSet<string> _reportedUnbound = new HashSet<string>();
+
+        static void ReportUnboundSampler(FMAT mat, string sampler, string reason)
+        {
+            string key = $"{mat.Name}/{sampler}";
+            if (!_reportedUnbound.Add(key))
+                return;
+
+            Console.WriteLine($"[SPL3] Material '{mat.Name}' sampler {sampler}: {reason}; using default.");
+        }
 
         GLTexture GetDefaultTexture(string samplerName, ActiveUniformType type)
         {
@@ -1100,6 +1178,12 @@ namespace BfresEditor
                     textureIndex = bfresMaterial.TextureMaps.FindIndex(x => x.Sampler == resSampler);
                 }
 
+                string uniformName = locationInfo.FragmentLocation != -1
+                    ? ConvertSamplerID(locationInfo.FragmentLocation)
+                    : ConvertSamplerID(locationInfo.VertexLocation, true);
+                samplerTypes.TryGetValue(uniformName, out var type);
+
+                GLTexture bound = null;
                 if (textureIndex != -1)
                 {
                     var texMap = bfresMaterial.TextureMaps[textureIndex];
@@ -1107,18 +1191,23 @@ namespace BfresEditor
                     if (bfresMaterial.AnimatedSamplers.ContainsKey(texMap.Sampler))
                         name = bfresMaterial.AnimatedSamplers[texMap.Sampler];
 
-                    BindTexture(shader, GetTextures(), texMap, name, id);
+                    bound = BindTexture(shader, GetTextures(), texMap, name, id);
+
+                    if (bound != null && TargetForSamplerType(type) is TextureTarget want
+                        && bound.Target != want)
+                    {
+                        ReportUnboundSampler(bfresMaterial, sampler, $"{name} is {bound.Target}, sampler wants {want}");
+                        bound = null;
+                    }
+                    else if (bound == null)
+                        ReportUnboundSampler(bfresMaterial, sampler, $"texture '{name}' not found");
                 }
-                else
+
+                //Either an engine provided texture (shadow maps, light maps, paint, etc)
+                //or a material texture that did not resolve. so it dont
+                //load whatever the previous draw had there
+                if (bound == null)
                 {
-                    //Engine provided textures (shadow maps, light maps, paint, etc).
-                    //Pick a default with the texture target the program expects.
-                    string uniformName = locationInfo.FragmentLocation != -1
-                        ? ConvertSamplerID(locationInfo.FragmentLocation)
-                        : ConvertSamplerID(locationInfo.VertexLocation, true);
-
-                    samplerTypes.TryGetValue(uniformName, out var type);
-
                     GL.ActiveTexture(TextureUnit.Texture0 + id);
                     GetDefaultTexture(sampler, type).Bind();
                 }

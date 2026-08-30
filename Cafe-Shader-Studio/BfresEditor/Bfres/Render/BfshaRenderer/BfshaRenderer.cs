@@ -189,6 +189,12 @@ namespace BfresEditor
                     int location = shaderModel.Attributes[i].Location;
                     attributeLocations.Add(key, location);
                 }
+
+                if (HoianNXRender.DebugMaterials)
+                    Console.WriteLine($"[SPL3dbg] material '{MaterialData?.Name}' attributes shader["
+                        + string.Join(",", attributeLocations.Select(x => $"{x.Key}={x.Value}"))
+                        + "] mesh[" + string.Join(",", meshAsset.Attributes.Select(x => x.name)) + "]");
+
                 meshAsset.UpdateVaoAttributes(attributeLocations);
             }
         }
@@ -451,6 +457,13 @@ namespace BfresEditor
             GLShaders[ShaderIndex] = TegraShaderDecoder.LoadShaderProgram(
                 ShaderModel, ShaderModel.GetShaderVariation(program), yFlipSamplers);
             shaderProgram = GLShaderInfo.Program;
+
+            if (HoianNXRender.DebugMaterials)
+                Console.WriteLine($"[SPL3dbg] material '{MaterialData?.Name}' pass {ShaderIndex} "
+                    + $"-> {System.IO.Path.GetFileName(GLShaderInfo.VertPath)} "
+                    + $"{System.IO.Path.GetFileName(GLShaderInfo.FragPath)} "
+                    + $"constants vp={GLShaderInfo.VertexConstants?.Length.ToString() ?? "null"} "
+                    + $"fp={GLShaderInfo.PixelConstants?.Length.ToString() ?? "null"}");
         }
 
         private void DecodeWiiUBinary(BfshaLibrary.ResShaderProgram program)

@@ -4,7 +4,8 @@ obj/
 result
 result-*
 .direnv/
-# dotnet publish output / local nuget cache
+ida/
+tools/ShaderCheck/
 publish/
 .nuget/
 .vs/

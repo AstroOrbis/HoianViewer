@@ -21,7 +21,7 @@ namespace BfresEditor
         public static readonly System.Diagnostics.Stopwatch TotalTime = new System.Diagnostics.Stopwatch();
         public static int LoadCount = 0;
 
-        const int CacheVersion = 4;
+        const int CacheVersion = 5;
         static bool _cacheVersionChecked;
 
         public static string CacheDir = "ShaderCache";
@@ -56,6 +56,7 @@ namespace BfresEditor
         public static System.Threading.Tasks.Task PrepareShaderAsync(BfshaLibrary.ShaderVariation variation)
         {
             TegraShaderTranslator.InitCaps();
+            EnsureCacheVersion();
 
             var shaderData = variation.BinaryProgram.ShaderInfoData;
             var vertexData = GetShaderData(shaderData.VertexShaderCode);
@@ -69,20 +70,8 @@ namespace BfresEditor
                 if (!Directory.Exists(CacheDir))
                     Directory.CreateDirectory(CacheDir);
 
-                void WriteIfMissing(string path, Func<string> generate)
-                {
-                    if (File.Exists(path))
-                        return;
-                    string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                    File.WriteAllText(tmp, generate());
-                    try { File.Move(tmp, path); }
-                    catch { File.Delete(tmp); } //another thread won the race
-                }
-
-                WriteIfMissing(Path.Combine(CacheDir, $"{vertHash}.vert"),
-                    () => DecompileShader(BfshaLibrary.ShaderType.VERTEX, vertexData));
-                WriteIfMissing(Path.Combine(CacheDir, $"{fragHash}.frag"),
-                    () => DecompileShader(BfshaLibrary.ShaderType.PIXEL, fragData));
+                WriteDecompiled(Path.Combine(CacheDir, $"{key}.vert"),
+                    Path.Combine(CacheDir, $"{fragHash}.frag"), vertexData, fragData);
             }));
         }
 
@@ -214,9 +203,11 @@ namespace BfresEditor
             HashTime.Stop();
 
             bool hasPatch = yFlipSamplers != null && yFlipSamplers.Count > 0;
-            string key = hasPatch
-                ? $"{vertHash}_{fragHash}_fbpatch"
-                : $"{vertHash}_{fragHash}";
+            string programKey = $"{vertHash}_{fragHash}";
+            string key = hasPatch ? programKey + "_fbpatch" : programKey;
+
+            string vertPath = Path.Combine(CacheDir, $"{programKey}.vert");
+            string fragPath = Path.Combine(CacheDir, $"{fragHash}.frag");
 
             if (_shaderInfoCache.TryGetValue(key, out var cached))
                 return cached;
@@ -228,8 +219,8 @@ namespace BfresEditor
                     Program = GLShaderPrograms[key],
                     VertexConstants = GetConstants(shaderData.VertexShaderCode),
                     PixelConstants = GetConstants(shaderData.PixelShaderCode),
-                    FragPath = Path.Combine(CacheDir, $"{fragHash}.frag"),
-                    VertPath = Path.Combine(CacheDir, $"{vertHash}.vert"),
+                    FragPath = fragPath,
+                    VertPath = vertPath,
                 };
                 _shaderInfoCache[key] = info;
                 return info;
@@ -239,14 +230,7 @@ namespace BfresEditor
                 Directory.CreateDirectory(CacheDir);
 
             DecompileTime.Start();
-            if (!File.Exists(Path.Combine(CacheDir, $"{vertHash}.vert")))
-            {
-                File.WriteAllText(Path.Combine(CacheDir, $"{vertHash}.vert"),
-                      DecompileShader(BfshaLibrary.ShaderType.VERTEX, vertexData));
-            }
-            if (!File.Exists(Path.Combine(CacheDir, $"{fragHash}.frag")))
-                File.WriteAllText(Path.Combine(CacheDir, $"{fragHash}.frag"),
-                     DecompileShader(BfshaLibrary.ShaderType.PIXEL, fragData));
+            WriteDecompiled(vertPath, fragPath, vertexData, fragData);
             DecompileTime.Stop();
 
             //Try the driver program binary cache first, which skips the costly GL compile/link.
@@ -257,8 +241,8 @@ namespace BfresEditor
 
             if (program == null)
             {
-                string fragSource = File.ReadAllText(Path.Combine(CacheDir, $"{fragHash}.frag"));
-                string vertSource = File.ReadAllText(Path.Combine(CacheDir, $"{vertHash}.vert"));
+                string fragSource = File.ReadAllText(fragPath);
+                string vertSource = File.ReadAllText(vertPath);
 
                 if (hasPatch)
                     fragSource = PatchFramebufferSamplers(fragSource, yFlipSamplers);
@@ -291,8 +275,8 @@ namespace BfresEditor
                 Program = program,
                 VertexConstants = GetConstants(shaderData.VertexShaderCode),
                 PixelConstants = GetConstants(shaderData.PixelShaderCode),
-                FragPath = Path.Combine(CacheDir, $"{fragHash}.frag"),
-                VertPath = Path.Combine(CacheDir, $"{vertHash}.vert"),
+                FragPath = fragPath,
+                VertPath = vertPath,
             };
             _shaderInfoCache[key] = result;
             return result;
@@ -437,10 +421,41 @@ namespace BfresEditor
             }
         }
 
-        static string DecompileShader(BfshaLibrary.ShaderType shaderType, byte[] Data)
+        //Decompiles a vertex/pixel pair. The two stages have to go through the translator
+        //together, see TegraShaderTranslator.TranslatePair, which is why the decompiled
+        //vertex source is cached per program rather than per vertex bytecode hash.
+        static (string Vertex, string Pixel) DecompilePair(byte[] vertexData, byte[] pixelData)
         {
-            string translated = TegraShaderTranslator.Translate(Data);
+            var (vertex, pixel) = TegraShaderTranslator.TranslatePair(vertexData, pixelData);
+            return (StripSamplerBindings(vertex), AppendPixelShaderCode(StripSamplerBindings(pixel)));
+        }
 
+        //Writes the decompiled sources for a program if they are not cached yet.
+        //The vertex source is keyed by the program (vertex + pixel hash), the pixel
+        //source only by its own hash since it does not depend on the vertex shader.
+        static void WriteDecompiled(string vertPath, string fragPath, byte[] vertexData, byte[] fragData)
+        {
+            bool needVert = !File.Exists(vertPath);
+            bool needFrag = !File.Exists(fragPath);
+            if (!needVert && !needFrag)
+                return;
+
+            var (vertex, pixel) = DecompilePair(vertexData, fragData);
+
+            if (needVert) WriteAtomic(vertPath, vertex);
+            if (needFrag) WriteAtomic(fragPath, pixel);
+        }
+
+        static void WriteAtomic(string path, string contents)
+        {
+            string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            File.WriteAllText(tmp, contents);
+            try { File.Move(tmp, path); }
+            catch { try { File.Delete(tmp); } catch { } } //another thread won the race
+        }
+
+        static string StripSamplerBindings(string translated)
+        {
             // Strip layout(binding=N) from sampler declarations so glUniform1i can assign texture units.
             var sb = new StringBuilder();
             foreach (var line in translated.ReplaceLineEndings("\n").Split('\n'))
@@ -456,12 +471,7 @@ namespace BfresEditor
                     sb.AppendLine(line);
                 }
             }
-            translated = sb.ToString();
-
-            if (shaderType == BfshaLibrary.ShaderType.PIXEL)
-                translated = AppendPixelShaderCode(translated);
-
-            return translated;
+            return sb.ToString();
         }
 
     }

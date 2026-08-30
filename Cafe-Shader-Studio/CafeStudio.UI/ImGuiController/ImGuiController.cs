@@ -261,10 +261,16 @@ void main()
 
         private void UpdateImGuiInput(GameWindow wnd)
         {
-            if (!wnd.Focused)
-                return;
-
             ImGuiIOPtr io = ImGui.GetIO();
+
+            if (!wnd.Focused)
+            {
+                PrevMouseState = Mouse.GetCursorState();
+                PrevKeyboardState = Keyboard.GetState();
+                io.MouseWheel = 0;
+                io.MouseWheelH = 0;
+                return;
+            }
 
             MouseState MouseState = Mouse.GetCursorState();
             KeyboardState KeyboardState = Keyboard.GetState();

@@ -150,6 +150,16 @@ namespace BfresEditor
             mat.BlendState.AlphaTest = alphaTest == "true";
             mat.BlendState.AlphaValue = alphaValue;
 
+            mat.BlendState.ColorSrc = ConvertBlendSrc(colorSrc);
+            mat.BlendState.ColorDst = ConvertBlendDst(colorDst);
+            mat.BlendState.ColorOp = ConvertBlendOp(colorOp);
+            mat.BlendState.AlphaSrc = ConvertBlendSrc(alphaSrc);
+            mat.BlendState.AlphaDst = ConvertBlendDst(alphaDst);
+            mat.BlendState.AlphaOp = ConvertBlendOp(alphaOp);
+
+            if (depthTestFunc != null && DepthFunctions.ContainsKey(depthTestFunc))
+                mat.BlendState.DepthFunction = DepthFunctions[depthTestFunc];
+
             if (alphaFunc == "always")
                 mat.BlendState.AlphaFunction = AlphaFunction.Always;
             if (alphaFunc == "equal")
@@ -165,6 +175,63 @@ namespace BfresEditor
             if (alphaFunc == "never")
                 mat.BlendState.AlphaFunction = AlphaFunction.Never;
         }
+
+        //Blend factor and equation names as the render state stores them.
+        static readonly Dictionary<string, BlendingFactor> BlendFactors = new Dictionary<string, BlendingFactor>()
+        {
+            { "zero", BlendingFactor.Zero },
+            { "one", BlendingFactor.One },
+            { "src_color", BlendingFactor.SrcColor },
+            { "one_minus_src_color", BlendingFactor.OneMinusSrcColor },
+            { "dst_color", BlendingFactor.DstColor },
+            { "one_minus_dst_color", BlendingFactor.OneMinusDstColor },
+            { "src_alpha", BlendingFactor.SrcAlpha },
+            { "one_minus_src_alpha", BlendingFactor.OneMinusSrcAlpha },
+            { "dst_alpha", BlendingFactor.DstAlpha },
+            { "one_minus_dst_alpha", BlendingFactor.OneMinusDstAlpha },
+            { "const_color", BlendingFactor.ConstantColor },
+            { "one_minus_const_color", BlendingFactor.OneMinusConstantColor },
+            { "const_alpha", BlendingFactor.ConstantAlpha },
+            { "one_minus_const_alpha", BlendingFactor.OneMinusConstantAlpha },
+            { "src_alpha_saturate", BlendingFactor.SrcAlphaSaturate },
+            { "src1_color", BlendingFactor.Src1Color },
+            { "one_minus_src1_color", (BlendingFactor)All.OneMinusSrc1Color },
+            { "src1_alpha", BlendingFactor.Src1Alpha },
+            { "one_minus_src1_alpha", (BlendingFactor)All.OneMinusSrc1Alpha },
+        };
+
+        static readonly Dictionary<string, BlendEquationMode> BlendOps = new Dictionary<string, BlendEquationMode>()
+        {
+            { "add", BlendEquationMode.FuncAdd },
+            { "src_minus_dst", BlendEquationMode.FuncSubtract },
+            { "dst_minus_src", BlendEquationMode.FuncReverseSubtract },
+            { "min", BlendEquationMode.Min },
+            { "max", BlendEquationMode.Max },
+        };
+
+        static readonly Dictionary<string, DepthFunction> DepthFunctions = new Dictionary<string, DepthFunction>()
+        {
+            { "never", DepthFunction.Never },
+            { "less", DepthFunction.Less },
+            { "equal", DepthFunction.Equal },
+            { "lequal", DepthFunction.Lequal },
+            { "greater", DepthFunction.Greater },
+            { "nequal", DepthFunction.Notequal },
+            { "gequal", DepthFunction.Gequal },
+            { "always", DepthFunction.Always },
+        };
+
+        //An unrecognised name reads as zero, the way the engine's own lookup falls back.
+        static BlendingFactorSrc ConvertBlendSrc(string name) =>
+            (BlendingFactorSrc)(name != null && BlendFactors.ContainsKey(name)
+                ? BlendFactors[name] : BlendingFactor.Zero);
+
+        static BlendingFactorDest ConvertBlendDst(string name) =>
+            (BlendingFactorDest)(name != null && BlendFactors.ContainsKey(name)
+                ? BlendFactors[name] : BlendingFactor.Zero);
+
+        static BlendEquationMode ConvertBlendOp(string name) =>
+            name != null && BlendOps.ContainsKey(name) ? BlendOps[name] : BlendEquationMode.FuncAdd;
 
         static BlendEquationMode ConvertOp(GX2BlendCombine func)
         {
