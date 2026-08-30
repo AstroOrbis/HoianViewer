@@ -53,16 +53,31 @@ namespace GLFrameworkEngine
             if (_disposed || ID != -1)
                 return;
 
+            //Assign before binding. Binding a name that has not been generated yet is
+            //invalid and leaves the driver's vertex array namespace in a bad state.
             GL.GenVertexArrays(1, out int vao);
+            ID = vao;
             Bind();
 
-            ID = vao;
             if (GLErrorHandler.CheckGLError()) Debugger.Break();
+        }
+
+        /// <summary>
+        /// Generates the vertex array object if it does not exist yet.
+        /// Returns false when there is nothing valid to bind.
+        /// </summary>
+        private bool EnsureInitialized()
+        {
+            if (_disposed)
+                return false;
+
+            Initialize();
+            return ID != -1;
         }
 
         public void Enable(ShaderProgram shader)
         {
-            if (_disposed) return;
+            if (!EnsureInitialized()) return;
 
             GL.BindVertexArray(ID);
             EnableAttributes(shader, attributes, buffer);
@@ -128,12 +143,14 @@ namespace GLFrameworkEngine
 
         public void BindVertexArray()
         {
+            if (!EnsureInitialized()) return;
+
             GL.BindVertexArray(ID);
         }
 
         public void Bind()
         {
-            if (_disposed) return;
+            if (!EnsureInitialized()) return;
 
             GL.BindVertexArray(ID);
             GL.BindBuffer(BufferTarget.ArrayBuffer, buffer);
@@ -141,7 +158,7 @@ namespace GLFrameworkEngine
 
         public void Use()
         {
-            if (_disposed) return;
+            if (!EnsureInitialized()) return;
 
             GL.BindVertexArray(ID);
             if (indexBuffer.HasValue)
