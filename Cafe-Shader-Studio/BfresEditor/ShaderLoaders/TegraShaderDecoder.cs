@@ -24,6 +24,8 @@ namespace BfresEditor
         const int CacheVersion = 3;
         static bool _cacheVersionChecked;
 
+        public static string CacheDir = "ShaderCache";
+
         //Fine-grained profiling of a shader load (all on the render thread).
         public static readonly Stopwatch DataTime = new Stopwatch();       //bfsha bytecode access
         public static readonly Stopwatch HashTime = new Stopwatch();       //SHA1 of bytecode
@@ -64,8 +66,8 @@ namespace BfresEditor
 
             return _pendingPrep.GetOrAdd(key, _ => System.Threading.Tasks.Task.Run(() =>
             {
-                if (!Directory.Exists("ShaderCache"))
-                    Directory.CreateDirectory("ShaderCache");
+                if (!Directory.Exists(CacheDir))
+                    Directory.CreateDirectory(CacheDir);
 
                 void WriteIfMissing(string path, Func<string> generate)
                 {
@@ -77,9 +79,9 @@ namespace BfresEditor
                     catch { File.Delete(tmp); } //another thread won the race
                 }
 
-                WriteIfMissing($"ShaderCache/{vertHash}.vert",
+                WriteIfMissing(Path.Combine(CacheDir, $"{vertHash}.vert"),
                     () => DecompileShader(BfshaLibrary.ShaderType.VERTEX, vertexData));
-                WriteIfMissing($"ShaderCache/{fragHash}.frag",
+                WriteIfMissing(Path.Combine(CacheDir, $"{fragHash}.frag"),
                     () => DecompileShader(BfshaLibrary.ShaderType.PIXEL, fragData));
             }));
         }
@@ -90,11 +92,11 @@ namespace BfresEditor
             if (_cacheVersionChecked) return;
             _cacheVersionChecked = true;
 
-            string versionPath = "ShaderCache/version.txt";
+            string versionPath = Path.Combine(CacheDir, "version.txt");
 
-            if (!Directory.Exists("ShaderCache"))
+            if (!Directory.Exists(CacheDir))
             {
-                Directory.CreateDirectory("ShaderCache");
+                Directory.CreateDirectory(CacheDir);
                 File.WriteAllText(versionPath, CacheVersion.ToString());
                 return;
             }
@@ -107,7 +109,7 @@ namespace BfresEditor
                 return;
 
             Console.WriteLine($"[ShaderCache] Version mismatch ({existing} -> {CacheVersion}), purging cache.");
-            foreach (var f in Directory.GetFiles("ShaderCache"))
+            foreach (var f in Directory.GetFiles(CacheDir))
                 try { File.Delete(f); } catch { }
             File.WriteAllText(versionPath, CacheVersion.ToString());
         }
@@ -224,37 +226,37 @@ namespace BfresEditor
                     Program = GLShaderPrograms[key],
                     VertexConstants = GetConstants(shaderData.VertexShaderCode),
                     PixelConstants = GetConstants(shaderData.PixelShaderCode),
-                    FragPath = $"ShaderCache/{fragHash}.frag",
-                    VertPath = $"ShaderCache/{vertHash}.vert",
+                    FragPath = Path.Combine(CacheDir, $"{fragHash}.frag"),
+                    VertPath = Path.Combine(CacheDir, $"{vertHash}.vert"),
                 };
                 _shaderInfoCache[key] = info;
                 return info;
             }
 
-            if (!Directory.Exists($"ShaderCache"))
-                Directory.CreateDirectory("ShaderCache");
+            if (!Directory.Exists(CacheDir))
+                Directory.CreateDirectory(CacheDir);
 
             DecompileTime.Start();
-            if (!File.Exists($"ShaderCache/{vertHash}.vert"))
+            if (!File.Exists(Path.Combine(CacheDir, $"{vertHash}.vert")))
             {
-                File.WriteAllText($"ShaderCache/{vertHash}.vert",
+                File.WriteAllText(Path.Combine(CacheDir, $"{vertHash}.vert"),
                       DecompileShader(BfshaLibrary.ShaderType.VERTEX, vertexData));
             }
-            if (!File.Exists($"ShaderCache/{fragHash}.frag"))
-                File.WriteAllText($"ShaderCache/{fragHash}.frag",
+            if (!File.Exists(Path.Combine(CacheDir, $"{fragHash}.frag")))
+                File.WriteAllText(Path.Combine(CacheDir, $"{fragHash}.frag"),
                      DecompileShader(BfshaLibrary.ShaderType.PIXEL, fragData));
             DecompileTime.Stop();
 
             //Try the driver program binary cache first, which skips the costly GL compile/link.
-            string binaryPath = $"ShaderCache/{key}.progbin";
+            string binaryPath = Path.Combine(CacheDir, $"{key}.progbin");
             BinaryTime.Start();
             ShaderProgram program = TryLoadProgramBinary(binaryPath);
             BinaryTime.Stop();
 
             if (program == null)
             {
-                string fragSource = File.ReadAllText($"ShaderCache/{fragHash}.frag");
-                string vertSource = File.ReadAllText($"ShaderCache/{vertHash}.vert");
+                string fragSource = File.ReadAllText(Path.Combine(CacheDir, $"{fragHash}.frag"));
+                string vertSource = File.ReadAllText(Path.Combine(CacheDir, $"{vertHash}.vert"));
 
                 if (hasPatch)
                     fragSource = PatchFramebufferSamplers(fragSource, yFlipSamplers);
@@ -287,8 +289,8 @@ namespace BfresEditor
                 Program = program,
                 VertexConstants = GetConstants(shaderData.VertexShaderCode),
                 PixelConstants = GetConstants(shaderData.PixelShaderCode),
-                FragPath = $"ShaderCache/{fragHash}.frag",
-                VertPath = $"ShaderCache/{vertHash}.vert",
+                FragPath = Path.Combine(CacheDir, $"{fragHash}.frag"),
+                VertPath = Path.Combine(CacheDir, $"{vertHash}.vert"),
             };
             _shaderInfoCache[key] = result;
             return result;

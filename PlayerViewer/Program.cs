@@ -15,6 +15,7 @@ namespace PlayerViewer
         static void Main(string[] args)
         {
             Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+            BfresEditor.TegraShaderDecoder.CacheDir = AppPaths.ShaderCacheDir;
 
             RenderResourceCreator.CreateTextureInstance += (sender, e) =>
             {
