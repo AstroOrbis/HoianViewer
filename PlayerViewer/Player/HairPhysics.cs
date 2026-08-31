@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using OpenTK;
@@ -31,6 +31,11 @@ namespace PlayerViewer.Player
         readonly float[][] _capsuleMinDist; //per collidable x particle: rest-aware pushout distance
         bool _primed;
         float _accumulator;
+
+        //Snapshot of the sim at the first exported frame, and the target an export
+        //converges back to so a looping clip does not jump when it wraps.
+        Vector3[] _convergePos;
+        Vector3[] _convergePrev;
 
         const float StepTime = 1.0f / 60.0f;
         const int MaxSubsteps = 4;
@@ -123,7 +128,24 @@ namespace PlayerViewer.Player
         }
 
         /// <summary>Restarts the sim from the current animation pose next update.</summary>
-        public void Reset() => _primed = false;
+        public void Reset()
+        {
+            _primed = false;
+            _convergePos = null;
+            _convergePrev = null;
+        }
+
+        /// <summary>
+        /// Records the current particle state as the pose an export converges back to.
+        /// Verlet carries velocity in the gap between the two buffers, so both are kept.
+        /// </summary>
+        public void CaptureConvergeState()
+        {
+            if (!_primed)
+                return;
+            _convergePos = (Vector3[])_pos.Clone();
+            _convergePrev = (Vector3[])_prev.Clone();
+        }
 
         /// <summary>Debug: dumps sim state (skinned targets vs particles, capsules).</summary>
         public void DebugDump()
@@ -163,7 +185,11 @@ namespace PlayerViewer.Player
         /// the active hair-arrange (scale ~0 = hidden under headgear) are left at
         /// their welded transform.
         /// </summary>
-        public void Update(float dt, Dictionary<string, ArrangeBoneParam> arrange = null)
+        public void Update(
+            float dt,
+            Dictionary<string, ArrangeBoneParam> arrange = null,
+            float convergeWeight = 0
+        )
         {
             if (!Enabled)
                 return;
@@ -194,6 +220,18 @@ namespace PlayerViewer.Player
             {
                 Step(StepTime);
                 _accumulator -= StepTime;
+            }
+
+            //Blend toward the captured pose before the bones are written, so the frame
+            //that gets rendered is the blended one.
+            if (convergeWeight > 0 && _convergePos != null)
+            {
+                float w = MathHelper.Clamp(convergeWeight, 0, 1);
+                for (int p = 0; p < _pos.Length; p++)
+                {
+                    _pos[p] += (_convergePos[p] - _pos[p]) * w;
+                    _prev[p] += (_convergePrev[p] - _prev[p]) * w;
+                }
             }
 
             WriteBones(arrange);

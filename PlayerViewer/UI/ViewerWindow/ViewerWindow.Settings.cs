@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using ImGuiNET;
 using PlayerViewer.Core;
 using Vector2 = System.Numerics.Vector2;
@@ -160,6 +160,20 @@ namespace PlayerViewer.UI
                 v => _config.PrerollLoops = Math.Clamp(v, 0, PrerollMaxLoops),
                 () => dirty = true,
                 plLabel
+            );
+
+            ImGui.Spacing();
+            Widgets.Checkbox(
+                "Physics convergence",
+                _config.PhysicsConverge,
+                v => _config.PhysicsConverge = v,
+                () => dirty = true
+            );
+            ImGui.TextWrapped(
+                "An animation export records the hair pose on its first frame and eases back "
+                    + "to it over the last quarter second (or a quarter of the clip, whichever "
+                    + "is shorter), so a loop wraps without the hair jumping. Warm-up settles "
+                    + "the sim before recording; this closes the loop at the end."
             );
 
             Widgets.SectionHeader("Data folder");

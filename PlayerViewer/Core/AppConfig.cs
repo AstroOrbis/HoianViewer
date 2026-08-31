@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using Newtonsoft.Json;
@@ -129,6 +129,11 @@ namespace PlayerViewer.Core
         //whenever an animation loads, so frame 0 has a twitch each time the exported
         //WebP/WebM loops. A warm-up lets the sim settle first. 0 = disabled.
         public int PrerollLoops = 1;
+
+        //Physics convergence: an animation export records the hair cloth pose at its first
+        //frame and blends back to it over the last min(0.25s, clip length / 4), so a looping
+        //clip does not jump when it wraps. Independent of the warm-up above.
+        public bool PhysicsConverge = true;
 
         //--- Capture-panel selections (persisted so they stick between runs)
         public int CaptureResIndex = 2; //index into the resolution dropdown

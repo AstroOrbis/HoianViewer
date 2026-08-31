@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -405,7 +405,14 @@ namespace PlayerViewer.UI
                 //Cloth dt is wall-clock per output frame (1/fps), independent of playback
                 //speed; matches the viewport, where the sim advances in real time and the
                 //speed slider only scales how fast the animation cursor moves.
-                PlaybackUpdate(1f / _exportFps);
+                PlaybackUpdate(1f / _exportFps, ConvergeWeight(_animExportIndex));
+                //The pose to converge back to is the one the first exported frame ended on,
+                //so it is taken after that frame's step rather than before the export starts.
+                if (!_convergeCaptured)
+                {
+                    _scene?.CaptureHairConvergeState();
+                    _convergeCaptured = true;
+                }
                 _uiFrame = PlaybackAnimFrame;
             }
             else if (_chainActive)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -1320,8 +1320,10 @@ namespace PlayerViewer.Player
 
         /// <summary>
         /// Per-frame update: advance animation, update the human skeleton, weld parts.
+        /// <paramref name="hairConvergeWeight"/> pulls the hair cloth back toward the pose
+        /// recorded by <see cref="CaptureHairConvergeState"/>; 0 leaves the sim alone.
         /// </summary>
-        public void Update(float deltaSeconds)
+        public void Update(float deltaSeconds, float hairConvergeWeight = 0)
         {
             if (Human == null)
                 return;
@@ -1375,7 +1377,7 @@ namespace PlayerViewer.Player
             {
                 Parts.TryGetValue(PartKind.Hair, out var hairPart);
                 foreach (var sim in _hairPhysics)
-                    sim.Update(deltaSeconds, hairPart?.HairArrange);
+                    sim.Update(deltaSeconds, hairPart?.HairArrange, hairConvergeWeight);
             }
         }
 
@@ -1384,6 +1386,13 @@ namespace PlayerViewer.Player
         {
             foreach (var sim in _hairPhysics)
                 sim.Reset();
+        }
+
+        /// <summary>Records the current hair cloth pose as an export's convergence target.</summary>
+        public void CaptureHairConvergeState()
+        {
+            foreach (var sim in _hairPhysics)
+                sim.CaptureConvergeState();
         }
 
         /// <summary>Debug: dumps all hair sim states.</summary>

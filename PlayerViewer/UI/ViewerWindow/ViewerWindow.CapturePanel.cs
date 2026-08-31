@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime;
 using ImGuiNET;
@@ -622,12 +622,12 @@ namespace PlayerViewer.UI
                 _scene?.SetAnimFrame(f);
         }
 
-        void PlaybackUpdate(float dt)
+        void PlaybackUpdate(float dt, float hairConvergeWeight = 0)
         {
             if (_standalone != null)
                 _standalone.Update(dt);
             else
-                _scene?.Update(dt);
+                _scene?.Update(dt, hairConvergeWeight);
         }
 
         void PlaybackPlay(string name, bool resetHair)
@@ -755,6 +755,7 @@ namespace PlayerViewer.UI
             }
 
             _animExporting = true;
+            _convergeCaptured = false;
             PlaybackSetPaused(true);
             //Restart cloth from rest so the first exported frame is reproducible; a chain resets
             //once here then runs continuously across steps (ChainSeek rebinds without a reset).
@@ -769,6 +770,39 @@ namespace PlayerViewer.UI
 
         //Max warm-up loops surfaced in the Settings slider; bounds the synchronous pre-roll.
         internal const int PrerollMaxLoops = 5;
+
+        //Longest convergence tail, in seconds. A short clip gets a quarter of its length
+        //instead so the blend never eats a meaningful part of the animation.
+        const float ConvergeMaxSeconds = 0.25f;
+
+        //Set once the first exported frame has been simulated, so the pose it converges
+        //back to is the one that frame actually rendered.
+        bool _convergeCaptured;
+
+        /// <summary>
+        /// How strongly the frame at <paramref name="index"/> is pulled back toward the
+        /// pose captured at the start. 0 until the tail begins, 1 on the final frame.
+        /// Smoothstepped: a straight ramp lands the position continuously but kinks the
+        /// velocity where the tail starts, which reads as a flinch.
+        /// </summary>
+        float ConvergeWeight(float index)
+        {
+            if (!_config.PhysicsConverge || _animExportTotal <= 0)
+                return 0;
+
+            float outputFrames = MathF.Ceiling(_animExportTotal / _animExportAdvance);
+            if (outputFrames < 2)
+                return 0;
+
+            float tail =
+                Math.Min(ConvergeMaxSeconds, (outputFrames / _exportFps) * 0.25f) * _exportFps;
+            if (tail < 1)
+                return 0;
+
+            float remaining = (outputFrames - 1) - (index / _animExportAdvance);
+            float t = Math.Clamp(1f - (remaining / tail), 0f, 1f);
+            return t * t * (3f - 2f * t);
+        }
 
         //Play first animation PrerollLoops times WITHOUT capturing, so the verlet sim is steady
         //before recording. Runs synchronously (physics without GL) and mirrors 1/fps cloth dt.
