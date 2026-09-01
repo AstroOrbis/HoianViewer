@@ -7,6 +7,7 @@ using OpenTK;
 using Toolbox.Core;
 using BfresEditor.Properties;
 using GLFrameworkEngine;
+using Gsys;
 
 namespace BfresEditor
 {
@@ -56,8 +57,7 @@ namespace BfresEditor
         /// Set PV_SHADER_DEBUG=1 to log per material shader option sets, resolved program
         /// passes and every sampler binding. Very verbose.
         /// </summary>
-        public static readonly bool DebugMaterials =
-            Environment.GetEnvironmentVariable("PV_SHADER_DEBUG") == "1";
+        public static readonly bool DebugMaterials = TegraShaderDecoder.DebugLog;
 
         public override bool UseRenderer(FMAT material, string archive, string model)
         {
@@ -297,26 +297,36 @@ namespace BfresEditor
         /// An archive shipped with the model wins over the game one, but only if it can
         /// actually draw the material.
         /// </summary>
+        //The file the material came from, for the probe an edit re-runs.
+        BFRES _bfres;
+
         public override void TryLoadShader(BFRES bfres, FMDL fmdl, FSHP mesh, BfresMeshAsset meshAsset)
         {
+            _bfres = bfres;
             ArchiveTime.Start();
             var archives = EnumerateArchives(bfres, mesh.Material.ShaderArchive).ToList();
             ArchiveTime.Stop();
 
             BfshaLibrary.ShaderModel chosen = null;
+            BfshaLibrary.BfshaFile chosenArchive = null;
             foreach (var (source, bfsha) in archives)
             {
                 var model = bfsha.ShaderModels.Values.FirstOrDefault(x => x.Name == mesh.Material.ShaderModel);
                 if (model == null)
                     continue;
 
-                chosen ??= model;
+                if (chosen == null)
+                {
+                    chosen = model;
+                    chosenArchive = bfsha;
+                }
 
                 ShaderModel = model;
                 if (model.GetProgramIndex(BuildOptions(mesh.Material, meshAsset)) == -1)
                     continue;
 
                 chosen = model;
+                chosenArchive = bfsha;
                 if (DebugMaterials)
                     Console.WriteLine($"[SPL3dbg] material '{mesh.Material.Name}' archive "
                         + $"'{bfsha.Name}' from {source} ({archives.Count} candidate(s))");
@@ -326,9 +336,30 @@ namespace BfresEditor
             if (chosen == null)
                 return;
 
+            ShaderArchiveFile = chosenArchive;
             OnLoadTime.Start();
             OnLoad(chosen, fmdl, mesh, meshAsset);
             OnLoadTime.Stop();
+        }
+
+        //The archive is chosen by probing for the material's key and an edit moves the key,
+        //so an edit that the current archive cannot serve runs the probe again. Only a
+        //candidate that serves the material pass replaces it; otherwise the current archive,
+        //which may be a preview bound over the base, is left alone.
+        void Reprobe(FMAT mat, BfresMeshAsset mesh, Dictionary<string, string> options)
+        {
+            if (_bfres == null || ShaderModel == null || ShaderModel.GetProgramIndex(options) != -1)
+                return;
+            foreach (var (source, bfsha) in EnumerateArchives(_bfres, mat.ShaderArchive))
+            {
+                var model = bfsha.ShaderModels.Values.FirstOrDefault(x => x.Name == mat.ShaderModel);
+                if (model == null || ReferenceEquals(model, ShaderModel) || model.GetProgramIndex(options) == -1)
+                    continue;
+                if (DebugMaterials)
+                    Console.WriteLine($"[SPL3dbg] material '{mat.Name}' moved to archive '{bfsha.Name}' from {source}");
+                SwitchArchive(bfsha, model, mesh, true);
+                return;
+            }
         }
 
         /// <summary>
@@ -514,6 +545,7 @@ namespace BfresEditor
             ProgramPasses.Clear();
 
             var options = BuildOptions(mat, mesh);
+            Reprobe(mat, mesh, options);
 
             //Materials repeat the same option sets across models (skin, gear cloth,
             //accessories...), so the resolved program indices are memoized.
@@ -716,7 +748,7 @@ namespace BfresEditor
                     continue;
 
                 if (!mat.ShaderOptions.TryGetValue(uniformName, out string option)
-                    || option == "<Default Value>")
+                    || option == GsysShaderOptions.Unset)
                 {
                     if (!defaults.TryGetValue(uniformName, out option))
                         continue;
@@ -1054,6 +1086,11 @@ namespace BfresEditor
             new Dictionary<int, Dictionary<string, ActiveUniformType>>();
 
         public static void ClearRuntimeCaches() => _samplerTypeCache.Clear();
+
+        static HoianNXRender()
+        {
+            ShaderProgram.Deleting += program => _samplerTypeCache.Remove(program);
+        }
 
         static Dictionary<string, ActiveUniformType> GetSamplerTypes(int programID)
         {

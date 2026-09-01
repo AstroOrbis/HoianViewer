@@ -51,7 +51,11 @@ namespace BfresEditor
 
         public FSHP Shape { get; set; }
 
-        public bool IsVisible => Shape.IsVisible && Shape.Material.IsVisible;
+        //The material the parent render is isolating, if any; see BfresRender.IsolateMaterial.
+        FMAT IsolateMaterial => (MaterialAsset as BfresMaterialAsset)?.ParentRenderer?.IsolateMaterial;
+
+        public bool IsVisible => Shape.IsVisible && Shape.Material.IsVisible
+            && (IsolateMaterial == null || Shape.Material == IsolateMaterial);
 
         public List<VaoAttribute> Attributes;
 

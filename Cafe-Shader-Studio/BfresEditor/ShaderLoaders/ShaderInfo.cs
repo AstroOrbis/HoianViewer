@@ -18,6 +18,9 @@ namespace BfresEditor
 
         public ShaderProgram Program;
 
+        //The decoder's cache key, so a holder can hand the program back.
+        public string Key;
+
         //Scanning the decompiled GLSL for used uniforms is only needed by the material
         //parameter editor UI, and is expensive (full source scan), so it is done lazily.
         private BfshaLibrary.UniformBlock _vertexUniformBlock;

@@ -116,10 +116,6 @@ namespace Toolbox.Core.Switch
                         uint size = TegraX1Swizzle.DIV_ROUND_UP(width, blkWidth) * TegraX1Swizzle.DIV_ROUND_UP(height, blkHeight) * bpp;
 
 
-                        if (TegraX1Swizzle.pow2_round_up(TegraX1Swizzle.DIV_ROUND_UP(height, blkWidth)) < linesPerBlockHeight)
-                            blockHeightShift += 1;
-
-
                         uint width__ = TegraX1Swizzle.DIV_ROUND_UP(width, blkWidth);
                         uint height__ = TegraX1Swizzle.DIV_ROUND_UP(height, blkHeight);
 
@@ -128,17 +124,17 @@ namespace Toolbox.Core.Switch
                         SurfaceSize += (uint)AlignedData.Length;
                         MipOffsets.Add(SurfaceSize);
 
-                        //Get the first mip offset and current one and the total image size
-                        int msize = (int)((MipOffsets[0] + ImageData.Length - MipOffsets[mipLevel]) / texture.ArrayCount);
+                        uint mipBlockHeightLog2 = TegraX1Swizzle.ShrinkBlockHeightLog2(BlockHeightLog2, height__);
+                        int msize = (int)(ImageData.Length / texture.ArrayCount - MipOffsets[mipLevel]);
 
                         var data_ = ImageData.Slice((int)(ArrayOffset + MipOffsets[mipLevel]), msize);
 
                         try
                         {
                             Pitch = TegraX1Swizzle.round_up(width__ * bpp, 64);
-                            SurfaceSize += Pitch * TegraX1Swizzle.round_up(height__, Math.Max(1, blockHeight >> blockHeightShift) * 8);
+                            SurfaceSize += Pitch * TegraX1Swizzle.round_up(height__, (1u << (int)mipBlockHeightLog2) * 8);
 
-                            Span<byte> result = TegraX1Swizzle.deswizzle(width, height, depth, blkWidth, blkHeight, blkDepth, target, bpp, TileMode, (int)Math.Max(0, BlockHeightLog2 - blockHeightShift), data_);
+                            Span<byte> result = TegraX1Swizzle.deswizzle(width, height, depth, blkWidth, blkHeight, blkDepth, target, bpp, TileMode, (int)mipBlockHeightLog2, data_);
                             //Create a copy and use that to remove uneeded data
                             byte[] result_ = new byte[size];
                             Array.Copy(result.ToArray(), 0, result_, 0, size);
@@ -174,6 +170,31 @@ namespace Toolbox.Core.Switch
                 blockHeight = 16;
 
             return blockHeight;
+        }
+
+        /// <summary>
+        /// Gobs per block in Y for a surface whose base level is <paramref name="height"/> rows
+        /// of block linear elements.
+        /// </summary>
+        public static uint GetBlockHeightLog2(uint height)
+        {
+            uint log2 = 4;
+            while (log2 > 0 && 8u * (1u << (int)log2) > height + height / 2)
+                log2--;
+
+            return log2;
+        }
+
+        /// <summary>
+        /// The same block shrunk for one mip level: halve while half the block would still
+        /// cover the level on its own.
+        /// </summary>
+        public static uint ShrinkBlockHeightLog2(uint log2, uint height)
+        {
+            while (log2 > 0 && (8u << (int)(log2 - 1)) >= height)
+                log2--;
+
+            return log2;
         }
 
         public static uint DIV_ROUND_UP(uint n, uint d)

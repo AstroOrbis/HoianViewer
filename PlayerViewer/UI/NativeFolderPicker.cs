@@ -25,6 +25,10 @@ namespace PlayerViewer.UI
             {
                 return null;
             }
+            finally
+            {
+                Dismissed();
+            }
         }
 
         public static string OpenFile(string title, string filterDisplay, string filterExt)
@@ -38,6 +42,10 @@ namespace PlayerViewer.UI
             catch
             {
                 return null;
+            }
+            finally
+            {
+                Dismissed();
             }
         }
 
@@ -58,7 +66,19 @@ namespace PlayerViewer.UI
             {
                 return null;
             }
+            finally
+            {
+                Dismissed();
+            }
         }
+
+        /// <summary>
+        /// Called however a dialog ends, including a cancel and an exception. A dialog is
+        /// modal and runs its own message loop, so the render loop is stopped for as long as
+        /// it is up, and the input that arrived meanwhile is not input for us: without this,
+        /// scrolling over a save dialog zooms the camera the moment it closes.
+        /// </summary>
+        static void Dismissed() => CafeStudio.UI.ImGuiController.DiscardPendingInput = true;
 
         // ---- Windows: modern IFileDialog (Explorer picker) ----
 

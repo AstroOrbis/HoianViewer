@@ -64,84 +64,114 @@ namespace Toolbox.Core.Imaging
 
         public List<byte[]> SwizzleSurfaceMipMaps(byte[] data, uint width, uint height, uint depth, uint MipCount, ref uint imageOffset)
         {
-            uint SurfaceSize = 0;
-            int blockHeightShift = 0;
-            int target = 1;
-            uint Pitch = 0;
-            uint blockHeight = 0;
+            return SwizzleSurfaceMipMaps(data, width, height, depth, MipCount, ref imageOffset, 1);
+        }
+
+        public List<byte[]> SwizzleSurfaceMipMaps(byte[] data, uint width, uint height, uint depth, uint MipCount, ref uint imageOffset, uint arrayCount, int forceBlockHeightLog2 = -1)
+        {
             uint blkWidth = TextureFormatHelper.GetBlockWidth(this.OutputFormat);
             uint blkHeight = TextureFormatHelper.GetBlockHeight(this.OutputFormat);
             uint blkDepth = TextureFormatHelper.GetBlockDepth(this.OutputFormat);
             uint bpp = TextureFormatHelper.GetBytesPerPixel(this.OutputFormat);
 
-            MipOffsets = new uint[MipCount];
-
-            uint linesPerBlockHeight = 0;
+            if (arrayCount == 0)
+                arrayCount = 1;
 
             if (LinearMode)
             {
-                blockHeight = 1;
                 BlockHeightLog2 = 0;
                 Alignment = 1;
-
-                linesPerBlockHeight = 1;
                 ReadTextureLayout = 0;
             }
             else
             {
-                blockHeight = TegraX1Swizzle.GetBlockHeight(TegraX1Swizzle.DIV_ROUND_UP(height, blkHeight));
-                BlockHeightLog2 = (uint)Convert.ToString(blockHeight, 2).Length - 1;
+                BlockHeightLog2 = forceBlockHeightLog2 >= 0
+                    ? (uint)forceBlockHeightLog2
+                    : TegraX1Swizzle.GetBlockHeightLog2(TegraX1Swizzle.DIV_ROUND_UP(height, blkHeight));
                 Alignment = 512;
                 ReadTextureLayout = 1;
-
-                linesPerBlockHeight = blockHeight * 8;
             }
 
-            List<byte[]> mipmaps = new List<byte[]>();
+            uint linearLayerSize = 0;
             for (int mipLevel = 0; mipLevel < MipCount; mipLevel++)
             {
-                var result = WiiU.TextureHelper.GetCurrentMipSize(width, height, blkWidth, blkHeight, bpp, mipLevel);
-                uint offset = result.Item1;
-                uint size = result.Item2;
-                byte[] data_ = ByteUtils.SubArray(data, offset, size);
-
-                uint width_ = Math.Max(1, width >> mipLevel);
-                uint height_ = Math.Max(1, height >> mipLevel);
-                uint depth_ = Math.Max(1, depth >> mipLevel);
-
-                uint width__ = TegraX1Swizzle.DIV_ROUND_UP(width_, blkWidth);
-                uint height__ = TegraX1Swizzle.DIV_ROUND_UP(height_, blkHeight);
-                uint depth__ = TegraX1Swizzle.DIV_ROUND_UP(depth_, blkDepth);
-
-                byte[] AlignedData = new byte[(TegraX1Swizzle.round_up(imageOffset, Alignment) - imageOffset)];
-                SurfaceSize += (uint)AlignedData.Length;
-
-                MipOffsets[mipLevel] = SurfaceSize;
-                if (LinearMode)
-                {
-                    Pitch = width__ * bpp;
-
-                    if (target == 1)
-                        Pitch = TegraX1Swizzle.round_up(width__ * bpp, 32);
-
-                    SurfaceSize += Pitch * height__;
-                }
-                else
-                {
-                    if (TegraX1Swizzle.pow2_round_up(height__) < linesPerBlockHeight)
-                        blockHeightShift += 1;
-
-                    Pitch = TegraX1Swizzle.round_up(width__ * bpp, 64);
-                    SurfaceSize += Pitch * TegraX1Swizzle.round_up(height__, Math.Max(1, blockHeight >> blockHeightShift) * 8);
-                }
-
-                Span<byte> SwizzledData = TegraX1Swizzle.swizzle(width_, height_, depth_, blkWidth, blkHeight, blkDepth, target, bpp, (uint)TileMode, (int)Math.Max(0, BlockHeightLog2 - blockHeightShift), data_);
-                mipmaps.Add(AlignedData.Concat(SwizzledData.ToArray()).ToArray());
+                uint w = Math.Max(1, width >> mipLevel);
+                uint h = Math.Max(1, height >> mipLevel);
+                linearLayerSize += TegraX1Swizzle.DIV_ROUND_UP(w, blkWidth)
+                    * TegraX1Swizzle.DIV_ROUND_UP(h, blkHeight) * bpp;
             }
-            ImageSize = SurfaceSize;
-            imageOffset = SurfaceSize;
 
+            uint baseRows = TegraX1Swizzle.DIV_ROUND_UP(height, blkHeight);
+            uint layerAlignment = LinearMode
+                ? 1
+                : 512u << (int)TegraX1Swizzle.ShrinkBlockHeightLog2(BlockHeightLog2, baseRows);
 
+            MipOffsets = new uint[MipCount];
+            List<byte[]> mipmaps = new List<byte[]>();
+            uint layerSize = 0;
+
+            for (int arrayLevel = 0; arrayLevel < arrayCount; arrayLevel++)
+            {
+                uint SurfaceSize = 0;
+                for (int mipLevel = 0; mipLevel < MipCount; mipLevel++)
+                {
+                    var result = WiiU.TextureHelper.GetCurrentMipSize(width, height, blkWidth, blkHeight, bpp, mipLevel);
+                    uint offset = result.Item1 + (uint)arrayLevel * linearLayerSize;
+                    uint size = result.Item2;
+                    byte[] data_ = ByteUtils.SubArray(data, offset, size);
+
+                    uint width_ = Math.Max(1, width >> mipLevel);
+                    uint height_ = Math.Max(1, height >> mipLevel);
+                    uint depth_ = Math.Max(1, depth >> mipLevel);
+
+                    uint width__ = TegraX1Swizzle.DIV_ROUND_UP(width_, blkWidth);
+                    uint height__ = TegraX1Swizzle.DIV_ROUND_UP(height_, blkHeight);
+
+                    byte[] AlignedData = new byte[TegraX1Swizzle.round_up(SurfaceSize, Alignment) - SurfaceSize];
+                    SurfaceSize += (uint)AlignedData.Length;
+                    if (arrayLevel == 0)
+                        MipOffsets[mipLevel] = SurfaceSize;
+
+                    uint mipBlockHeightLog2 = LinearMode
+                        ? 0
+                        : TegraX1Swizzle.ShrinkBlockHeightLog2(BlockHeightLog2, height__);
+
+                    uint Pitch;
+                    if (LinearMode)
+                    {
+                        Pitch = width__ * bpp;
+                        if (Target == 1)
+                            Pitch = TegraX1Swizzle.round_up(Pitch, 32);
+
+                        SurfaceSize += Pitch * height__;
+                    }
+                    else
+                    {
+                        Pitch = TegraX1Swizzle.round_up(width__ * bpp, 64);
+                        SurfaceSize += Pitch * TegraX1Swizzle.round_up(height__, (1u << (int)mipBlockHeightLog2) * 8);
+                    }
+
+                    Span<byte> SwizzledData = TegraX1Swizzle.swizzle(width_, height_, depth_, blkWidth, blkHeight, blkDepth, Target, bpp, (uint)TileMode, (int)mipBlockHeightLog2, data_);
+                    mipmaps.Add(AlignedData.Concat(SwizzledData.ToArray()).ToArray());
+                }
+
+                if (arrayCount > 1)
+                {
+                    uint padded = TegraX1Swizzle.round_up(SurfaceSize, layerAlignment);
+                    if (padded != SurfaceSize)
+                    {
+                        int last = mipmaps.Count - 1;
+                        mipmaps[last] = mipmaps[last]
+                            .Concat(new byte[padded - SurfaceSize])
+                            .ToArray();
+                        SurfaceSize = padded;
+                    }
+                }
+                layerSize = SurfaceSize;
+            }
+
+            ImageSize = layerSize * arrayCount;
+            imageOffset = ImageSize;
 
             return mipmaps;
         }

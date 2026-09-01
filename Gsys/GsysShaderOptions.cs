@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using BfresLibrary;
 
-namespace BfresEditor
+namespace Gsys
 {
     /// <summary>
     /// The shader option set the game builds for a material, and the assign type rules that
@@ -61,10 +61,10 @@ namespace BfresEditor
         /// </summary>
         static readonly Dictionary<string, string> AssignFallback = new Dictionary<string, string>()
         {
-            { "gsys_assign_zprepass",          "gsys_assign_zonly" },
-            { "gsys_assign_gbuffer",           "gsys_assign_zonly" },
-            { "gsys_assign_depth_silhouette",  "gsys_assign_zonly" },
-            { "gsys_assign_depthshadow",       "gsys_assign_zonly" },
+            { "gsys_assign_zprepass", "gsys_assign_zonly" },
+            { "gsys_assign_gbuffer", "gsys_assign_zonly" },
+            { "gsys_assign_depth_silhouette", "gsys_assign_zonly" },
+            { "gsys_assign_depthshadow", "gsys_assign_zonly" },
         };
 
         /// <summary>
@@ -95,15 +95,28 @@ namespace BfresEditor
             {
                 if (op.Value == Unset)
                     continue;
-                options[op.Key] = op.Value;
+                //A bool stored as text is the choice named 1 or 0.
+                options[op.Key] =
+                    op.Value == "True" ? "1"
+                    : op.Value == "False" ? "0"
+                    : op.Value;
             }
 
-            options["gsys_renderstate"] = Lookup(RenderStateModes, GetRenderInfo(mat, "gsys_render_state_mode"));
-            options["gsys_alpha_test_func"] = Lookup(AlphaTestFuncs, GetRenderInfo(mat, "gsys_alpha_test_func"));
-            options["gsys_alpha_test_enable"] = GetRenderInfo(mat, "gsys_alpha_test_enable") == "true" ? "1" : "0";
+            options["gsys_renderstate"] = Lookup(
+                RenderStateModes,
+                GetRenderInfo(mat, "gsys_render_state_mode")
+            );
+            options["gsys_alpha_test_func"] = Lookup(
+                AlphaTestFuncs,
+                GetRenderInfo(mat, "gsys_alpha_test_func")
+            );
+            options["gsys_alpha_test_enable"] =
+                GetRenderInfo(mat, "gsys_alpha_test_enable") == "true" ? "1" : "0";
             options["gsys_pass"] = Lookup(PassTypes, GetRenderInfo(mat, "gsys_pass"));
-            options["gsys_display_face_type"] = Lookup(DisplayFaceTypes,
-                GetRenderInfo(mat, "gsys_render_state_display_face"));
+            options["gsys_display_face_type"] = Lookup(
+                DisplayFaceTypes,
+                GetRenderInfo(mat, "gsys_render_state_display_face")
+            );
 
             return options;
         }
@@ -112,8 +125,11 @@ namespace BfresEditor
         /// Adds the dynamic half: the skin weight count off the shape and the assign type
         /// for this pass.
         /// </summary>
-        public static void AddDynamicOptions(Dictionary<string, string> options,
-            uint vertexSkinCount, string assignType)
+        public static void AddDynamicOptions(
+            Dictionary<string, string> options,
+            uint vertexSkinCount,
+            string assignType
+        )
         {
             options["gsys_weight"] = vertexSkinCount.ToString();
             options["gsys_assign_type"] = assignType;
@@ -133,22 +149,27 @@ namespace BfresEditor
         }
 
         //An unset or unrecognised render state reads as the first choice, same as the engine.
-        static string Lookup(Dictionary<string, string> table, string value)
+        static string Lookup(IReadOnlyDictionary<string, string> table, string value)
         {
             if (value != null && table.TryGetValue(value, out string choice))
                 return choice;
             return "0";
         }
 
-        static readonly Dictionary<string, string> RenderStateModes = new Dictionary<string, string>()
-        {
-            { "opaque", "0" },
-            { "mask", "1" },
-            { "translucent", "2" },
-            { "custom", "3" },
-        };
+        //The engine's render info name to choice index tables, in the engine's order.
+        public static readonly IReadOnlyDictionary<string, string> RenderStateModes =
+            new Dictionary<string, string>()
+            {
+                { "opaque", "0" },
+                { "mask", "1" },
+                { "translucent", "2" },
+                { "custom", "3" },
+            };
 
-        static readonly Dictionary<string, string> AlphaTestFuncs = new Dictionary<string, string>()
+        public static readonly IReadOnlyDictionary<string, string> AlphaTestFuncs = new Dictionary<
+            string,
+            string
+        >()
         {
             { "never", "0" },
             { "less", "1" },
@@ -160,7 +181,10 @@ namespace BfresEditor
             { "always", "7" },
         };
 
-        static readonly Dictionary<string, string> PassTypes = new Dictionary<string, string>()
+        public static readonly IReadOnlyDictionary<string, string> PassTypes = new Dictionary<
+            string,
+            string
+        >()
         {
             { "no_setting", "0" },
             { "seal", "1" },
@@ -168,12 +192,13 @@ namespace BfresEditor
             { "reduced_buffer", "3" },
         };
 
-        static readonly Dictionary<string, string> DisplayFaceTypes = new Dictionary<string, string>()
-        {
-            { "both", "0" },
-            { "front", "1" },
-            { "back", "2" },
-            { "none", "3" },
-        };
+        public static readonly IReadOnlyDictionary<string, string> DisplayFaceTypes =
+            new Dictionary<string, string>()
+            {
+                { "both", "0" },
+                { "front", "1" },
+                { "back", "2" },
+                { "none", "3" },
+            };
     }
 }

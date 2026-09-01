@@ -91,6 +91,19 @@ namespace BfresEditor
         /// </summary>
         public BfshaLibrary.ShaderModel ShaderModel { get; set; }
 
+        /// <summary>
+        /// The shader model the archive probe chose, which stays the authority for the
+        /// program key even while <see cref="RebindArchive"/> has a generated archive bound.
+        /// </summary>
+        public BfshaLibrary.ShaderModel BaseShaderModel { get; private set; }
+
+        public BfshaLibrary.BfshaFile BaseShaderArchiveFile { get; private set; }
+
+        /// <summary>
+        /// The archive the shader model was taken from. 
+        /// </summary>
+        public BfshaLibrary.BfshaFile ShaderArchiveFile { get; set; }
+
         public bool IsSwitch => ShaderModel.BnshFileStream != null;
 
         public BfshaRenderer() { }
@@ -122,6 +135,7 @@ namespace BfresEditor
             var shaderModel = bfsha.ShaderModels.Values.FirstOrDefault(x => x.Name == mesh.Material.ShaderModel);
             if (shaderModel != null)
             {
+                ShaderArchiveFile = bfsha;
                 OnLoadTime.Start();
                 OnLoad(shaderModel, fmdl, mesh, meshAsset);
                 OnLoadTime.Stop();
@@ -159,6 +173,8 @@ namespace BfresEditor
             };
 
             ShaderModel = shaderModel;
+            BaseShaderModel = shaderModel;
+            BaseShaderArchiveFile = ShaderArchiveFile;
             MaterialData = mesh.Material;
             ParentModel = model;
             //Load mesh function for loading the custom shader for the first time
@@ -197,6 +213,80 @@ namespace BfresEditor
 
                 meshAsset.UpdateVaoAttributes(attributeLocations);
             }
+        }
+
+        /// <summary>
+        /// The shader samplers the resolved programs actually read, which is a subset of what
+        /// the archive declares: a specialised program only carries a location for the
+        /// samplers its own branches reach. The union over every pass this material is drawn
+        /// with, since a sampler only zonly reads still has to be bound.
+        ///
+        /// This is what SetTextureUniforms iterates, so a sampler outside it is not merely
+        /// unused, it is absent from the program's binding table.
+        /// </summary>
+        public HashSet<string> SamplersRead()
+        {
+            var read = new HashSet<string>();
+            if (ShaderModel == null)
+                return read;
+            foreach (var pass in ProgramPasses)
+            {
+                var locations = pass.SamplerLocations;
+                for (int i = 0; i < ShaderModel.Samplers.Count && i < locations.Length; i++)
+                    if (locations[i].VertexLocation != -1 || locations[i].FragmentLocation != -1)
+                        read.Add(ShaderModel.Samplers.GetKey(i));
+            }
+            return read;
+        }
+
+        /// <summary>
+        /// Points this material at a different shader archive, skipping the archive probe.
+        /// The material editor uses it to preview a variation it has just generated, which
+        /// lives in an archive assembled in memory rather than one on disk.
+        /// </summary>
+        public void RebindArchive(BfshaLibrary.BfshaFile archive, BfshaLibrary.ShaderModel model,
+            BfresMeshAsset meshAsset)
+        {
+            if (!SwitchArchive(archive ?? BaseShaderArchiveFile, model ?? BaseShaderModel, meshAsset, false))
+                return;
+            ReloadProgram(meshAsset);
+            meshAsset.Shape.HasValidShader = HasValidProgram;
+        }
+
+        /// <summary>
+        /// Points the material at another archive: the held programs go back, the mesh and
+        /// render state follow the new model, and the program is left for the caller to
+        /// resolve. With asBase the archive also becomes what the probe chose.
+        /// </summary>
+        protected bool SwitchArchive(BfshaLibrary.BfshaFile archive, BfshaLibrary.ShaderModel model,
+            BfresMeshAsset meshAsset, bool asBase)
+        {
+            if (model == null)
+                return false;
+            ShaderArchiveFile = archive;
+            ShaderModel = model;
+            if (asBase)
+            {
+                BaseShaderArchiveFile = archive;
+                BaseShaderModel = model;
+            }
+
+            ReleasePrograms();
+            _pendingPrep = null;
+            UpdateShader = true;
+
+            LoadMesh(meshAsset);
+            ReloadRenderState(meshAsset);
+
+            if (IsSwitch)
+            {
+                var attributeLocations = new Dictionary<string, int>();
+                for (int i = 0; i < ShaderModel.Attributes.Count; i++)
+                    attributeLocations.Add(ShaderModel.Attributes.GetKey(i),
+                        ShaderModel.Attributes[i].Location);
+                meshAsset.UpdateVaoAttributes(attributeLocations);
+            }
+            return true;
         }
 
         /// <summary>
@@ -317,7 +407,7 @@ namespace BfresEditor
 
             var firstBlock = GetBlock("vp_c1");
             firstBlock.Add(GLShaderInfo.VertexConstants);
-            firstBlock.RenderBuffer(programID, "vp_c1", 0);
+            firstBlock.RenderBuffer(programID, "_vp_c1", 0);
         }
 
         /// <summary>
@@ -331,7 +421,7 @@ namespace BfresEditor
 
             var firstBlock = GetBlock("fp_c1");
             firstBlock.Add(GLShaderInfo.PixelConstants);
-            firstBlock.RenderBuffer(programID, "fp_c1", 1);
+            firstBlock.RenderBuffer(programID, "_fp_c1", 1);
         }
 
         /// <summary>
@@ -427,8 +517,8 @@ namespace BfresEditor
             if (matBlock != null && GLShaderInfo != null)
             {
                 var locationInfo = ProgramPasses[this.ShaderIndex].UniformBlockLocations[matBlock.Index];
-                string blockNameFSH = IsSwitch ? $"fp_c{locationInfo.FragmentLocation + 3}_data" : $"CBUFFER_{locationInfo.FragmentLocation}.values";
-                string blockNameVSH = IsSwitch ? $"vp_c{locationInfo.VertexLocation + 3}_data" : $"CBUFFER_{locationInfo.VertexLocation}.values";
+                string blockNameFSH = IsSwitch ? $"fp_c{locationInfo.FragmentLocation + 3}.data" : $"CBUFFER_{locationInfo.FragmentLocation}.values";
+                string blockNameVSH = IsSwitch ? $"vp_c{locationInfo.VertexLocation + 3}.data" : $"CBUFFER_{locationInfo.VertexLocation}.values";
 
                 GLShaderInfo.CreateUsedUniformListVertex(matBlock, blockNameVSH);
                 GLShaderInfo.CreateUsedUniformListPixel(matBlock, blockNameFSH);
@@ -440,20 +530,54 @@ namespace BfresEditor
             "gsys_depth_buffer", "gsys_color_buffer"
         };
 
-        private void DecodeSwitchBinary(BfshaLibrary.ResShaderProgram program)
+        //The fragment samplers that read a framebuffer, whose UV the decompiled source has
+        //to be Y flipped for.
+        private HashSet<string> YFlipSamplers(BfshaLibrary.ShaderModel shaderModel,
+            BfshaLibrary.ResShaderProgram program)
         {
             HashSet<string> yFlipSamplers = null;
             var samplerLocs = program.SamplerLocations;
-            for (int i = 0; i < ShaderModel.Samplers.Count && i < samplerLocs.Length; i++)
+            for (int i = 0; i < shaderModel.Samplers.Count && i < samplerLocs.Length; i++)
             {
-                if (!_framebufferSamplers.Contains(ShaderModel.Samplers.GetKey(i)))
+                if (!_framebufferSamplers.Contains(shaderModel.Samplers.GetKey(i)))
                     continue;
                 int loc = samplerLocs[i].FragmentLocation;
                 if (loc < 0) continue;
                 yFlipSamplers ??= new HashSet<string>();
                 yFlipSamplers.Add(ConvertSamplerID(loc));
             }
+            return yFlipSamplers;
+        }
 
+        /// <summary>
+        /// Builds the GL program for one archive program ahead of the draw that needs it and
+        /// leaves it in the decoder's cache.
+        ///
+        /// Must be called on the render thread.
+        /// </summary>
+        public ShaderInfo PrewarmProgram(BfshaLibrary.ShaderModel shaderModel,
+            BfshaLibrary.ResShaderProgram program)
+        {
+            return TegraShaderDecoder.LoadShaderProgram(shaderModel,
+                shaderModel.GetShaderVariation(program), YFlipSamplers(shaderModel, program),
+                hold: false);
+        }
+
+        //Hands every held program back to the decoder, which keeps it until a scene goes away.
+        void ReleasePrograms()
+        {
+            for (int i = 0; i < GLShaders.Length; i++)
+            {
+                TegraShaderDecoder.Release(GLShaders[i]);
+                GLShaders[i] = null;
+            }
+        }
+
+        private void DecodeSwitchBinary(BfshaLibrary.ResShaderProgram program)
+        {
+            var yFlipSamplers = YFlipSamplers(ShaderModel, program);
+
+            TegraShaderDecoder.Release(GLShaders[ShaderIndex]);
             GLShaders[ShaderIndex] = TegraShaderDecoder.LoadShaderProgram(
                 ShaderModel, ShaderModel.GetShaderVariation(program), yFlipSamplers);
             shaderProgram = GLShaderInfo.Program;
@@ -693,10 +817,10 @@ namespace BfresEditor
         private void RenderBlock(UniformBlock block, int programID, int vertexLocation, int fragmentLocation, int binding)
         {
             if (vertexLocation != -1)
-                block.RenderBuffer(programID, IsSwitch ? $"vp_c{vertexLocation + 3}" : $"vp_{vertexLocation}", binding);
+                block.RenderBuffer(programID, IsSwitch ? $"_vp_c{vertexLocation + 3}" : $"vp_{vertexLocation}", binding);
 
             if (fragmentLocation != -1)
-                block.RenderBuffer(programID, IsSwitch ? $"fp_c{fragmentLocation + 3}" : $"fp_{fragmentLocation}", binding);
+                block.RenderBuffer(programID, IsSwitch ? $"_fp_c{fragmentLocation + 3}" : $"fp_{fragmentLocation}", binding);
         }
 
         private UniformBlock GetBlock(string name, bool reset = true)
@@ -799,6 +923,7 @@ namespace BfresEditor
                 block.Dispose();
 
             UniformBlocks.Clear();
+            ReleasePrograms();
         }
     }
 }

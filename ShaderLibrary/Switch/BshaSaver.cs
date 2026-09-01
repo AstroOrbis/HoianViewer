@@ -332,7 +332,7 @@ namespace ShaderLibrary
                         writer.Write((ushort)prog.SamplerIndices.Count);
                         writer.Write((ushort)prog.ImageIndices.Count);
                         writer.Write((ushort)prog.UniformBlockIndices.Count);
-                        writer.Write((ushort)prog.UniformBlockIndices.Count);
+                        writer.Write((ushort)prog.StorageBufferIndices.Count);
                         writer.Write(new byte[2]);
                     }
                     else if (bfsha.BinHeader.VersionMajor >= 7)

@@ -110,6 +110,15 @@ namespace GLFrameworkEngine
         //per program/name; it is called for every block of every mesh each frame.
         static readonly Dictionary<(int, string), int> _blockIndexCache = new Dictionary<(int, string), int>();
 
+        static UniformBlock()
+        {
+            ShaderProgram.Deleting += program =>
+            {
+                foreach (var key in _blockIndexCache.Keys.Where(k => k.Item1 == program).ToList())
+                    _blockIndexCache.Remove(key);
+            };
+        }
+
         static int GetBlockIndex(int programID, string name)
         {
             if (!_blockIndexCache.TryGetValue((programID, name), out int index))

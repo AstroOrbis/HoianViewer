@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using GLFrameworkEngine;
 using OpenTK;
 using OpenTK.Graphics.OpenGL;
@@ -114,6 +116,24 @@ namespace PlayerViewer.UI
 
         /// <summary>Game-accurate self shadowing (shadow prepass). On by default.</summary>
         public bool EnableSelfShadow = true;
+
+        /// <summary>
+        /// What the material editor's selection does to the viewport. Outline draws the scene
+        /// as it is and wireframes the selected material over the top; Isolate draws only the
+        /// selected material and wireframes everything else. (Only for preview)
+        /// </summary>
+        public enum MaterialView
+        {
+            None,
+            Outline,
+            Isolate,
+        }
+
+        public MaterialView MaterialViewMode = MaterialView.Isolate;
+
+        /// <summary>The material the editor has selected, or null.</summary>
+        public BfresEditor.FMAT SelectedMaterial;
+
         const int SuperSample = 2;
 
         //Above this pixel count captures render at 1x (a 4K capture is sharp already).
@@ -370,22 +390,36 @@ namespace PlayerViewer.UI
         /// <summary>Renders the scene into the final displayable texture.</summary>
         public void Render(IViewScene scene)
         {
-            RenderInternal(
-                scene,
-                _screen,
-                _final,
-                Width,
-                Height,
-                EffectiveScale(Width, Height),
-                new System.Numerics.Vector4(
-                    BackgroundColor.X,
-                    BackgroundColor.Y,
-                    BackgroundColor.Z,
-                    1
-                ),
-                false,
-                _screenDepth
-            );
+            //Isolation is a visibility filter every draw loop already honours, so it is set on
+            //the scene's renders around the viewport render alone and cleared however it ends.
+            var isolate = MaterialViewMode == MaterialView.Isolate ? SelectedMaterial : null;
+            foreach (var render in scene.AllRenders())
+                render.IsolateMaterial = isolate;
+            try
+            {
+                RenderInternal(
+                    scene,
+                    _screen,
+                    _final,
+                    Width,
+                    Height,
+                    EffectiveScale(Width, Height),
+                    new System.Numerics.Vector4(
+                        BackgroundColor.X,
+                        BackgroundColor.Y,
+                        BackgroundColor.Z,
+                        1
+                    ),
+                    false,
+                    _screenDepth,
+                    true
+                );
+            }
+            finally
+            {
+                foreach (var render in scene.AllRenders())
+                    render.IsolateMaterial = null;
+            }
         }
 
         public static bool DebugTrace;
@@ -413,7 +447,8 @@ namespace PlayerViewer.UI
             int scale,
             System.Numerics.Vector4 background,
             bool keepAlpha,
-            DepthTexture screenDepth = null
+            DepthTexture screenDepth = null,
+            bool materialOverlay = false
         )
         {
             int ssWidth = width * scale;
@@ -479,6 +514,12 @@ namespace PlayerViewer.UI
 
                 if (scene != null)
                 {
+                    //Isolate wireframes before the scene, so the one material that is drawn
+                    //paints over the lines instead of being covered by the ones in front of
+                    //it. Outline traces a material the scene draws, so that one goes on top.
+                    if (materialOverlay && MaterialViewMode == MaterialView.Isolate)
+                        DrawMaterialOutline(scene);
+
                     scene.Draw(Context, Pass.OPAQUE);
 
                     bool refract =
@@ -502,6 +543,9 @@ namespace PlayerViewer.UI
                         BfresEditor.HoianNXRender.RefractionColorBuffer = null;
                         BfresEditor.HoianNXRender.RefractionDepthBuffer = null;
                     }
+
+                    if (materialOverlay && MaterialViewMode == MaterialView.Outline)
+                        DrawMaterialOutline(scene);
                 }
                 Context.CurrentShader = null;
                 screen.Unbind();
@@ -537,6 +581,136 @@ namespace PlayerViewer.UI
             Context.Height = Height;
             Camera.Width = Width;
             Camera.Height = Height;
+        }
+
+        /// <summary>
+        /// Wireframes one side of the material selection over the scene: the selected material
+        /// in Outline mode, everything else in Isolate mode, where those meshes are already out
+        /// of the normal passes.
+        /// </summary>
+        void DrawMaterialOutline(IViewScene scene)
+        {
+            if (MaterialViewMode == MaterialView.None || SelectedMaterial == null)
+                return;
+
+            bool isolate = MaterialViewMode == MaterialView.Isolate;
+            ShaderProgram shader = null;
+            var previousShader = Context.CurrentShader;
+
+            foreach (var render in scene.AllRenders())
+            {
+                if (!render.IsVisible)
+                    continue;
+                foreach (var model in render.Models.OfType<BfresEditor.BfresModelAsset>())
+                {
+                    if (!model.IsVisible)
+                        continue;
+                    foreach (var mesh in model.Meshes)
+                    {
+                        if (
+                            !mesh.Shape.IsVisible
+                            || !mesh.Shape.Material.IsVisible
+                            || mesh.IsDepthShadow
+                            || mesh.IsCubeMap
+                        )
+                            continue;
+                        if (isolate == (mesh.Shape.Material == SelectedMaterial))
+                            continue;
+
+                        if (shader == null)
+                        {
+                            shader = GlobalShaders.GetShader("PICKING");
+                            Context.CurrentShader = shader;
+                            var mtxCam = Camera.ViewProjectionMatrix;
+                            shader.SetMatrix4x4("mtxCam", ref mtxCam);
+                            shader.SetVector4("color", new Vector4(1.0f, 0.72f, 0.24f, 1));
+                            GL.Disable(EnableCap.DepthTest);
+                            GL.DepthMask(false);
+                            GL.Disable(EnableCap.Blend);
+                            GL.Disable(EnableCap.CullFace);
+                            GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
+                            GL.Enable(EnableCap.LineSmooth);
+                            GL.LineWidth(1.5f);
+                        }
+
+                        if (mesh.UpdateVertexData)
+                            mesh.UpdateVertexBuffer();
+
+                        SetSkinningUniforms(shader, model, mesh);
+                        var worldTransform = render.Transform.TransformMatrix;
+                        shader.SetMatrix4x4("mtxMdl", ref worldTransform);
+                        mesh.defaultVao.Enable(shader);
+                        mesh.defaultVao.Use();
+                        mesh.Draw();
+                    }
+                }
+            }
+
+            if (shader == null)
+                return;
+
+            GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
+            GL.Disable(EnableCap.LineSmooth);
+            GL.LineWidth(1);
+            GL.DepthMask(true);
+            GL.Enable(EnableCap.DepthTest);
+            GL.Enable(EnableCap.CullFace);
+            GL.CullFace(CullFaceMode.Back);
+            Context.CurrentShader = previousShader;
+        }
+
+        //The picking shader skins in the vertex stage, so a skinned mesh needs the same
+        //bone palette the material shaders get.
+        static void SetSkinningUniforms(
+            ShaderProgram shader,
+            BfresEditor.BfresModelAsset model,
+            BfresEditor.BfresMeshAsset mesh
+        )
+        {
+            shader.SetInt("UseSkinning", 1);
+            shader.SetInt("SkinCount", mesh.SkinCount);
+
+            var bones = model.ModelData.Skeleton.Bones;
+            var rigidBind = bones[mesh.BoneIndex].Transform;
+            shader.SetMatrix4x4("RigidBindTransform", ref rigidBind);
+
+            if (mesh.SkinCount == 0)
+                return;
+
+            bool useInverse = mesh.SkinCount > 1;
+            var locations = BoneLocations(shader.program, bones.Count);
+            for (int i = 0; i < bones.Count; i++)
+            {
+                var transform =
+                    useInverse || ((BfresEditor.BfresBone)bones[i]).UseSmoothMatrix
+                        ? bones[i].Inverse * bones[i].Transform
+                        : bones[i].Transform;
+                if (locations[i] != -1)
+                    GL.UniformMatrix4(locations[i], false, ref transform);
+            }
+        }
+
+        //Bone uniform locations per program id, dropped when the program is deleted.
+        static readonly Dictionary<int, int[]> _boneLocations = new();
+
+        static ScenePipeline()
+        {
+            ShaderProgram.Deleting += program => _boneLocations.Remove(program);
+        }
+
+        static int[] BoneLocations(int program, int count)
+        {
+            if (
+                _boneLocations.TryGetValue(program, out var cached)
+                && cached.Length >= count
+                && cached[0] != -1
+            )
+                return cached;
+            var locations = new int[Math.Max(count, cached?.Length ?? 0)];
+            for (int i = 0; i < locations.Length; i++)
+                locations[i] = GL.GetUniformLocation(program, $"bones[{i}]");
+            _boneLocations[program] = locations;
+            return locations;
         }
 
         /// <summary>

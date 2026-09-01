@@ -160,6 +160,9 @@ namespace BfresEditor
 
                 byte[] output = new byte[outputSize];
                 deswizzled.Slice(0, (int)outputSize).CopyTo(output);
+
+                if (!IsBCNCompressed() && bpp == 4 && !Parameters.DontSwapRG)
+                    output = ImageUtility.ConvertBgraToRgba(output);
                 return output;
             }
             catch

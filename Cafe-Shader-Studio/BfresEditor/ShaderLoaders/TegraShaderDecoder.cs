@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.IO;
@@ -15,13 +15,57 @@ namespace BfresEditor
         public static Dictionary<string, ShaderProgram> GLShaderPrograms = new Dictionary<string, ShaderProgram>();
         static Dictionary<string, ShaderInfo> _shaderInfoCache = new Dictionary<string, ShaderInfo>();
 
+        //How many renderers hold each program. The disk cache keeps the sources and the
+        //program binary, so a program nobody holds can be dropped and reloaded later.
+        static readonly Dictionary<string, int> _holders = new Dictionary<string, int>();
+
         public static void ClearInfoCache() => _shaderInfoCache.Clear();
         public static int ShaderInfoCacheCount => _shaderInfoCache.Count;
+
+        /// <summary>Hands a program back; see <see cref="ReleaseUnused"/>.</summary>
+        public static void Release(ShaderInfo info)
+        {
+            if (info?.Key == null || !_holders.TryGetValue(info.Key, out int n))
+                return;
+            _holders[info.Key] = n - 1;
+        }
+
+        /// <summary>
+        /// Deletes every GL program no renderer holds and forgets the decompile tasks that
+        /// have finished. Called when a scene goes away; a later load comes back off disk.
+        /// Must be called on the render thread.
+        /// </summary>
+        public static int ReleaseUnused()
+        {
+            int freed = 0;
+            foreach (var key in new List<string>(GLShaderPrograms.Keys))
+            {
+                if (_holders.TryGetValue(key, out int n) && n > 0)
+                    continue;
+                if (DebugLog)
+                    Console.WriteLine($"[GL] free {key}");
+                GLShaderPrograms[key].Dispose();
+                GLShaderPrograms.Remove(key);
+                _shaderInfoCache.Remove(key);
+                _holders.Remove(key);
+                freed++;
+            }
+            foreach (var key in new List<string>(_pendingPrep.Keys))
+                if (_pendingPrep.TryGetValue(key, out var task) && task.IsCompleted)
+                    _pendingPrep.TryRemove(key, out _);
+            return freed;
+        }
+
+        static void Hold(string key)
+        {
+            _holders.TryGetValue(key, out int n);
+            _holders[key] = n + 1;
+        }
 
         public static readonly System.Diagnostics.Stopwatch TotalTime = new System.Diagnostics.Stopwatch();
         public static int LoadCount = 0;
 
-        const int CacheVersion = 5;
+        const int CacheVersion = 6;
         static bool _cacheVersionChecked;
 
         public static string CacheDir = "ShaderCache";
@@ -59,19 +103,23 @@ namespace BfresEditor
             EnsureCacheVersion();
 
             var shaderData = variation.BinaryProgram.ShaderInfoData;
-            var vertexData = GetShaderData(shaderData.VertexShaderCode);
-            var fragData = GetShaderData(shaderData.PixelShaderCode);
-            string fragHash = GetHashSHA1(fragData);
-            string vertHash = GetHashSHA1(vertexData);
+            string vertHash = GetStageHash(shaderData.VertexShaderCode);
+            string fragHash = GetStageHash(shaderData.PixelShaderCode);
             string key = $"{vertHash}_{fragHash}";
+
+            string vertPath = Path.Combine(CacheDir, $"{key}.vert");
+            string fragPath = Path.Combine(CacheDir, $"{fragHash}.frag");
+            if (File.Exists(vertPath) && File.Exists(fragPath))
+                return System.Threading.Tasks.Task.CompletedTask;
 
             return _pendingPrep.GetOrAdd(key, _ => System.Threading.Tasks.Task.Run(() =>
             {
                 if (!Directory.Exists(CacheDir))
                     Directory.CreateDirectory(CacheDir);
 
-                WriteDecompiled(Path.Combine(CacheDir, $"{key}.vert"),
-                    Path.Combine(CacheDir, $"{fragHash}.frag"), vertexData, fragData);
+                WriteDecompiled(vertPath, fragPath,
+                    GetShaderData(shaderData.VertexShaderCode),
+                    GetShaderData(shaderData.PixelShaderCode));
             }));
         }
 
@@ -104,6 +152,35 @@ namespace BfresEditor
         }
 
         /// <summary>
+        /// Walks the source a line at a time without normalising it into a second string and
+        /// then splitting that into one string per line.
+        /// </summary>
+        static void ForEachLine(string source, LineAction body)
+        {
+            int i = 0;
+            while (true)
+            {
+                int nl = source.IndexOf('\n', i);
+                int end = nl < 0 ? source.Length : nl;
+                int trimmed = end > i && source[end - 1] == '\r' ? end - 1 : end;
+                body(source.AsSpan(i, trimmed - i));
+                if (nl < 0)
+                    return;
+                i = nl + 1;
+            }
+        }
+
+        delegate void LineAction(ReadOnlySpan<char> line);
+
+        static int CountLines(string source)
+        {
+            int count = 1;
+            for (int i = source.IndexOf('\n'); i >= 0; i = source.IndexOf('\n', i + 1))
+                count++;
+            return count;
+        }
+
+        /// <summary>
         /// Patches the decompiled fragment shader for framebuffer samplers:
         /// - Y-flip UV: UV -> UV * vec2(1,-1) + vec2(0,1)  (OpenGL bottom-up -> NX top-down)
         /// </summary>
@@ -112,16 +189,19 @@ namespace BfresEditor
         {
             if (yFlipSamplers == null || yFlipSamplers.Count == 0) return fragSource;
 
-            var sb = new StringBuilder();
-            //Normalize first: the translator emits CRLF, so splitting on '\n' alone leaves a
-            //trailing '\r' on every line and AppendLine then writes a second line break.
-            foreach (var line in fragSource.ReplaceLineEndings("\n").Split('\n'))
+            var sb = new StringBuilder(fragSource.Length + 256);
+            ForEachLine(fragSource, line =>
             {
-                string patched = line;
+                if (!line.Contains("texture", StringComparison.Ordinal))
+                {
+                    sb.Append(line).Append(Environment.NewLine);
+                    return;
+                }
+                string patched = line.ToString();
                 foreach (var sampler in yFlipSamplers)
                     patched = PatchLineTexture(patched, sampler);
-                sb.AppendLine(patched);
-            }
+                sb.Append(patched).Append(Environment.NewLine);
+            });
             return sb.ToString();
         }
 
@@ -176,13 +256,43 @@ namespace BfresEditor
             return line;
         }
 
+        /// <summary>PV_SHADER_DEBUG=1: per material shader dumps and the load timing report.</summary>
+        public static readonly bool DebugLog =
+            Environment.GetEnvironmentVariable("PV_SHADER_DEBUG") == "1";
+
+        public static string TimingReport() =>
+            $"[ShaderCache] {LoadCount} load(s) in {TotalTime.Elapsed.TotalMilliseconds:0.0}ms"
+            + $"  hash {HashTime.Elapsed.TotalMilliseconds:0.0}"
+            + $"  data {DataTime.Elapsed.TotalMilliseconds:0.0}"
+            + $"  decompile {DecompileTime.Elapsed.TotalMilliseconds:0.0}"
+            + $"  progbin {BinaryTime.Elapsed.TotalMilliseconds:0.0}"
+            + $"  link {LinkTime.Elapsed.TotalMilliseconds:0.0}"
+            + $"  ({_shaderInfoCache.Count} cached)";
+
+        /// <summary>
+        /// Loads or fetches the program. With <paramref name="hold"/> the caller counts as a
+        /// holder and must <see cref="Release"/> it; without, the program is only warmed and
+        /// goes on the next <see cref="ReleaseUnused"/> unless something holds it by then.
+        /// </summary>
         public static ShaderInfo LoadShaderProgram(BfshaLibrary.ShaderModel shaderModel,
             BfshaLibrary.ShaderVariation variation,
-            HashSet<string> yFlipSamplers = null)
+            HashSet<string> yFlipSamplers = null, bool hold = true)
         {
             TotalTime.Start();
-            try { return LoadShaderProgramInternal(shaderModel, variation, yFlipSamplers); }
-            finally { TotalTime.Stop(); LoadCount++; }
+            try
+            {
+                var info = LoadShaderProgramInternal(shaderModel, variation, yFlipSamplers);
+                if (hold && info?.Key != null)
+                    Hold(info.Key);
+                return info;
+            }
+            finally
+            {
+                TotalTime.Stop();
+                LoadCount++;
+                if (LoadCount % 10 == 0 && DebugLog)
+                    Console.WriteLine(TimingReport());
+            }
         }
 
         static ShaderInfo LoadShaderProgramInternal(BfshaLibrary.ShaderModel shaderModel,
@@ -191,15 +301,10 @@ namespace BfresEditor
         {
             EnsureCacheVersion();
 
-            DataTime.Start();
             var shaderData = variation.BinaryProgram.ShaderInfoData;
-
-            var vertexData = GetShaderData(shaderData.VertexShaderCode);
-            var fragData = GetShaderData(shaderData.PixelShaderCode);
-            DataTime.Stop();
             HashTime.Start();
-            string fragHash = GetHashSHA1(fragData);
-            string vertHash = GetHashSHA1(vertexData);
+            string vertHash = GetStageHash(shaderData.VertexShaderCode);
+            string fragHash = GetStageHash(shaderData.PixelShaderCode);
             HashTime.Stop();
 
             bool hasPatch = yFlipSamplers != null && yFlipSamplers.Count > 0;
@@ -212,11 +317,12 @@ namespace BfresEditor
             if (_shaderInfoCache.TryGetValue(key, out var cached))
                 return cached;
 
-            if (GLShaderPrograms.ContainsKey(key))
+            if (GLShaderPrograms.TryGetValue(key, out var existing))
             {
                 var info = new ShaderInfo()
                 {
-                    Program = GLShaderPrograms[key],
+                    Program = existing,
+                    Key = key,
                     VertexConstants = GetConstants(shaderData.VertexShaderCode),
                     PixelConstants = GetConstants(shaderData.PixelShaderCode),
                     FragPath = fragPath,
@@ -230,7 +336,10 @@ namespace BfresEditor
                 Directory.CreateDirectory(CacheDir);
 
             DecompileTime.Start();
-            WriteDecompiled(vertPath, fragPath, vertexData, fragData);
+            var (freshVert, freshFrag) = WriteDecompiled(
+                vertPath, fragPath,
+                () => GetShaderData(shaderData.VertexShaderCode),
+                () => GetShaderData(shaderData.PixelShaderCode));
             DecompileTime.Stop();
 
             //Try the driver program binary cache first, which skips the costly GL compile/link.
@@ -241,8 +350,8 @@ namespace BfresEditor
 
             if (program == null)
             {
-                string fragSource = File.ReadAllText(fragPath);
-                string vertSource = File.ReadAllText(vertPath);
+                string fragSource = freshFrag ?? File.ReadAllText(fragPath);
+                string vertSource = freshVert ?? File.ReadAllText(vertPath);
 
                 if (hasPatch)
                     fragSource = PatchFramebufferSamplers(fragSource, yFlipSamplers);
@@ -273,6 +382,7 @@ namespace BfresEditor
             var result = new ShaderInfo()
             {
                 Program = program,
+                Key = key,
                 VertexConstants = GetConstants(shaderData.VertexShaderCode),
                 PixelConstants = GetConstants(shaderData.PixelShaderCode),
                 FragPath = fragPath,
@@ -325,14 +435,11 @@ namespace BfresEditor
         {
             bool writtenExtraUniforms = false;
 
-            var builder = new StringBuilder();
-
-            //Normalize first: see the note in PatchSamplerYFlip. These passes chain, so an
-            //unnormalized split here would stack another line break on top of the previous pass.
-            var lines = code.ReplaceLineEndings("\n").Split('\n');
+            var builder = new StringBuilder(code.Length + 1024);
+            int total = CountLines(code);
             int numLines = 0;
-            foreach (var line in lines) {
-                if (!writtenExtraUniforms && line.Contains("const int undef = 0;")) {
+            ForEachLine(code, line => {
+                if (!writtenExtraUniforms && line.Contains("const int undef = 0;", StringComparison.Ordinal)) {
                     //Extra in tool uniforms for in tool functions (ie selection color)
                     builder.AppendLine("struct EXTRA_BLOCK");
                     builder.AppendLine("{");
@@ -350,7 +457,8 @@ namespace BfresEditor
                     writtenExtraUniforms = true;
                 }
 
-                if (writtenExtraUniforms && line.Contains("    return;") && numLines >= lines.Length - 5) {
+                if (writtenExtraUniforms && numLines >= total - 5
+                    && line.Contains("    return;", StringComparison.Ordinal)) {
                     builder.AppendLine("    if (css_alphaTest != 0) {");
                     builder.AppendLine("        bool css_pass = true;");
                     builder.AppendLine("        if (css_alphaFunc == 0) css_pass = out_attr0.a >= css_alphaRef;");
@@ -363,27 +471,55 @@ namespace BfresEditor
                     builder.AppendLine("    out_attr0.rgb = out_attr0.rgb * (1 - extraBlock.selectionColor.a) + extraBlock.selectionColor.rgb * extraBlock.selectionColor.a;");
                 }
 
-                builder.AppendLine(line);
+                builder.Append(line).Append(Environment.NewLine);
                 numLines++;
-            }
+            });
             return builder.ToString();
         }
 
         //Hash algorithm for cached shaders. Make sure to only decompile unique/new shaders
-        static string GetHashSHA1(byte[] data)
+        static string GetHashSHA1(byte[] data) =>
+            Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(data));
+
+        static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, string>
+            _stageHash = new();
+
+        static string GetStageHash(BfshaLibrary.ShaderCodeData shaderData)
         {
-            using (var sha1 = new System.Security.Cryptography.SHA1CryptoServiceProvider()) {
-                return string.Concat(sha1.ComputeHash(data).Select(x => x.ToString("X2")));
-            }
+            if (_stageHash.TryGetValue(shaderData, out string hash))
+                return hash;
+
+            hash = GetHashSHA1(GetShaderData(shaderData));
+            _stageHash.AddOrUpdate(shaderData, hash);
+            return hash;
         }
 
         //Gets the raw byte data and splits off uneeded parts
         static byte[] GetShaderData(BfshaLibrary.ShaderCodeData shaderData)
         {
-            var data = ((BfshaLibrary.ShaderCodeDataBinary)shaderData).BinaryData;
-            byte[] data1 = data[1].ToArray();
+            DataTime.Start();
+            try { return GetShaderDataInternal(shaderData); }
+            finally { DataTime.Stop(); }
+        }
 
-            return ByteUtils.SubArray(data1, 48, (uint)data1.Length - 48);
+        static byte[] GetShaderDataInternal(BfshaLibrary.ShaderCodeData shaderData)
+        {
+            var data = ((BfshaLibrary.ShaderCodeDataBinary)shaderData).BinaryData;
+            var stream = data[1];
+            if (!stream.CanSeek)
+            {
+                byte[] whole = stream.ToArray();
+                return ByteUtils.SubArray(whole, 48, (uint)whole.Length - 48);
+            }
+
+            int length = (int)(stream.Length - 48);
+            if (length <= 0)
+                return Array.Empty<byte>();
+
+            byte[] result = new byte[length];
+            stream.Position = 48;
+            stream.ReadExactly(result, 0, length);
+            return result;
         }
 
         static byte[] GetConstants(BfshaLibrary.ShaderCodeData shaderData)
@@ -433,17 +569,28 @@ namespace BfresEditor
         //Writes the decompiled sources for a program if they are not cached yet.
         //The vertex source is keyed by the program (vertex + pixel hash), the pixel
         //source only by its own hash since it does not depend on the vertex shader.
-        static void WriteDecompiled(string vertPath, string fragPath, byte[] vertexData, byte[] fragData)
+        static void WriteDecompiled(string vertPath, string fragPath, byte[] vertexData, byte[] fragData) =>
+            WriteDecompiled(vertPath, fragPath, () => vertexData, () => fragData);
+
+        /// <summary>
+        /// The bytecode is fetched through the callbacks so a pair that is already on disk
+        /// costs two File.Exists and nothing else. Returns the sources it produced, or nulls
+        /// when it produced none.
+        /// </summary>
+        static (string Vertex, string Pixel) WriteDecompiled(
+            string vertPath, string fragPath,
+            Func<byte[]> vertexData, Func<byte[]> fragData)
         {
             bool needVert = !File.Exists(vertPath);
             bool needFrag = !File.Exists(fragPath);
             if (!needVert && !needFrag)
-                return;
+                return (null, null);
 
-            var (vertex, pixel) = DecompilePair(vertexData, fragData);
+            var (vertex, pixel) = DecompilePair(vertexData(), fragData());
 
             if (needVert) WriteAtomic(vertPath, vertex);
             if (needFrag) WriteAtomic(fragPath, pixel);
+            return (vertex, pixel);
         }
 
         static void WriteAtomic(string path, string contents)
@@ -454,23 +601,24 @@ namespace BfresEditor
             catch { try { File.Delete(tmp); } catch { } } //another thread won the race
         }
 
+        static readonly System.Text.RegularExpressions.Regex _bindingLayout =
+            new(@"layout\s*\(binding\s*=\s*\d+\)\s*",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
         static string StripSamplerBindings(string translated)
         {
             // Strip layout(binding=N) from sampler declarations so glUniform1i can assign texture units.
-            var sb = new StringBuilder();
-            foreach (var line in translated.ReplaceLineEndings("\n").Split('\n'))
+            var sb = new StringBuilder(translated.Length + 64);
+            ForEachLine(translated, line =>
             {
-                if (line.Contains("uniform sampler") || line.Contains("uniform usampler") ||
-                    line.Contains("uniform isampler"))
-                {
-                    sb.AppendLine(System.Text.RegularExpressions.Regex.Replace(
-                        line, @"layout\s*\(binding\s*=\s*\d+\)\s*", ""));
-                }
+                if (line.Contains("uniform sampler", StringComparison.Ordinal)
+                    || line.Contains("uniform usampler", StringComparison.Ordinal)
+                    || line.Contains("uniform isampler", StringComparison.Ordinal))
+                    sb.Append(_bindingLayout.Replace(line.ToString(), ""));
                 else
-                {
-                    sb.AppendLine(line);
-                }
-            }
+                    sb.Append(line);
+                sb.Append(Environment.NewLine);
+            });
             return sb.ToString();
         }
 

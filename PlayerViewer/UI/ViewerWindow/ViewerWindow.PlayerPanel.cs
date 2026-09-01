@@ -192,6 +192,16 @@ namespace PlayerViewer.UI
             }
         }
 
+        //-1 is the custom colours rather than a set.
+        void PickTeamColor(int index)
+        {
+            _useCustomTeamColor = index < 0;
+            if (index >= 0)
+                _teamColorIndex = index;
+            ApplyTeamColor();
+            SavePlayerConfig();
+        }
+
         void DrawTeamColorSection()
         {
             Widgets.SectionHeader("Team Color");
@@ -200,54 +210,35 @@ namespace PlayerViewer.UI
             string teamPreview = _useCustomTeamColor ? "Custom" : colorSet?.Name ?? "(default)";
             if (ImGui.BeginCombo("##teamcolor", teamPreview))
             {
-                //"Custom" first: freely picked colors instead of an RSDB set.
-                ImGui.ColorButton(
-                    "##swatchCustA",
-                    new Vector4(_customTeam.Alpha.X, _customTeam.Alpha.Y, _customTeam.Alpha.Z, 1),
-                    ImGuiColorEditFlags.NoTooltip,
-                    new Vector2(14, 14)
-                );
-                ImGui.SameLine();
-                ImGui.ColorButton(
-                    "##swatchCustB",
-                    new Vector4(_customTeam.Bravo.X, _customTeam.Bravo.Y, _customTeam.Bravo.Z, 1),
-                    ImGuiColorEditFlags.NoTooltip,
-                    new Vector2(14, 14)
-                );
-                ImGui.SameLine();
-                if (ImGui.Selectable("Custom", _useCustomTeamColor))
-                {
-                    _useCustomTeamColor = true;
-                    ApplyTeamColor();
-                    SavePlayerConfig();
-                }
-
-                for (int i = 0; i < _db.TeamColors.Count; i++)
-                {
-                    var set = _db.TeamColors[i];
-                    //Swatch preview
-                    ImGui.ColorButton(
-                        $"##swatchA{i}",
-                        new Vector4(set.Alpha.X, set.Alpha.Y, set.Alpha.Z, 1),
-                        ImGuiColorEditFlags.NoTooltip,
-                        new Vector2(14, 14)
-                    );
-                    ImGui.SameLine();
-                    ImGui.ColorButton(
-                        $"##swatchB{i}",
-                        new Vector4(set.Bravo.X, set.Bravo.Y, set.Bravo.Z, 1),
-                        ImGuiColorEditFlags.NoTooltip,
-                        new Vector2(14, 14)
-                    );
-                    ImGui.SameLine();
-                    if (ImGui.Selectable(set.Name, !_useCustomTeamColor && i == _teamColorIndex))
+                //"Custom" is row 0, freely picked colors instead of an RSDB set, so the sets
+                //sit one row further down than their own index.
+                Widgets.PopupRows(
+                    "teamcolor",
+                    _db.TeamColors.Count + 1,
+                    _useCustomTeamColor ? 0 : _teamColorIndex + 1,
+                    (row, isSelected) =>
                     {
-                        _useCustomTeamColor = false;
-                        _teamColorIndex = i;
-                        ApplyTeamColor();
-                        SavePlayerConfig();
-                    }
-                }
+                        var alpha = row == 0 ? _customTeam.Alpha : _db.TeamColors[row - 1].Alpha;
+                        var bravo = row == 0 ? _customTeam.Bravo : _db.TeamColors[row - 1].Bravo;
+                        ImGui.ColorButton(
+                            $"##swatchA{row}",
+                            new Vector4(alpha.X, alpha.Y, alpha.Z, 1),
+                            ImGuiColorEditFlags.NoTooltip,
+                            new Vector2(14, 14)
+                        );
+                        ImGui.SameLine();
+                        ImGui.ColorButton(
+                            $"##swatchB{row}",
+                            new Vector4(bravo.X, bravo.Y, bravo.Z, 1),
+                            ImGuiColorEditFlags.NoTooltip,
+                            new Vector2(14, 14)
+                        );
+                        ImGui.SameLine();
+                        string name = row == 0 ? "Custom" : _db.TeamColors[row - 1].Name;
+                        return ImGui.Selectable(name, isSelected);
+                    },
+                    row => PickTeamColor(row - 1)
+                );
                 ImGui.EndCombo();
             }
             if (_useCustomTeamColor)

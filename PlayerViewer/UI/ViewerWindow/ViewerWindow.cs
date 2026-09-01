@@ -130,6 +130,14 @@ namespace PlayerViewer.UI
             Console.WriteLine(
                 $"[GL] {GL.GetString(StringName.Renderer)} ({GL.GetString(StringName.Vendor)})"
             );
+            Console.WriteLine(
+                "[GL] parallel shader compile: "
+                    + (
+                        GLFrameworkEngine.ShaderProgram.SupportsParallelCompile
+                            ? "yes"
+                            : "no, links block the render thread"
+                    )
+            );
 
             //Anchor Toolbox's Shaders/Plugins/Hashes lookups to the exe directory. Its default
             //comes from Assembly.Location, which is empty under single-file publish and would null
@@ -165,10 +173,12 @@ namespace PlayerViewer.UI
             _preserveStateOnLoad = false;
             try
             {
-                _standalone?.Dispose();
-                _standalone = null;
+                TearDownStandalone();
+                //The ubershader and its option table come out of the romfs being replaced.
+                DisposeVariations();
                 _scene?.Dispose();
                 _scene = null;
+                ReleaseShaderPrograms();
                 CompactHeap();
 
                 _romfs = new Romfs(
@@ -302,6 +312,20 @@ namespace PlayerViewer.UI
             _imgui.PressChar(e.KeyChar);
         }
 
+        //ImGui's key state comes from these rather than from a poll of the keyboard device,
+        //which reports nothing in this OpenTK build.
+        protected override void OnKeyDown(KeyboardKeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            _imgui.KeyDown(e.Key);
+        }
+
+        protected override void OnKeyUp(KeyboardKeyEventArgs e)
+        {
+            base.OnKeyUp(e);
+            _imgui.KeyUp(e.Key);
+        }
+
         protected override void OnFileDrop(FileDropEventArgs e)
         {
             base.OnFileDrop(e);
@@ -324,8 +348,10 @@ namespace PlayerViewer.UI
             try
             {
                 bool hadPrevious = _standalone != null;
-                _standalone?.Dispose();
-                _standalone = null;
+                TearDownStandalone();
+                //Off for every model: on, it splices the whole model, which is minutes of CPU,
+                //and opening a file is usually to look at it.
+                SetSplicer(false);
                 if (hadPrevious)
                     CompactHeap();
 
@@ -346,12 +372,36 @@ namespace PlayerViewer.UI
 
         void CloseStandalone()
         {
+            TearDownStandalone();
+            CompactHeap();
+            _pipeline.FramePlayer();
+        }
+
+        /// <summary>
+        /// The one way a standalone model goes away, whichever door it leaves through: the
+        /// scene, the selections, the splice grids and the editor state all go together. The
+        /// ubershader stays, since it belongs to the romfs rather than to the model.
+        /// </summary>
+        void TearDownStandalone()
+        {
             _standalone?.Dispose();
             _standalone = null;
             _standaloneError = null;
+            _selectedMaterial = null;
+            _selectedTexture = null;
             _animSearch = "";
-            CompactHeap();
-            _pipeline.FramePlayer();
+            ResetVariations();
+            ResetMaterialEditor();
+            ReleaseShaderPrograms();
+        }
+
+        //The scene's renderers have handed their programs back, so what is left unheld can
+        //go. The disk cache brings a program back at its warm cost when it is next needed.
+        static void ReleaseShaderPrograms()
+        {
+            int freed = BfresEditor.TegraShaderDecoder.ReleaseUnused();
+            if (freed > 0)
+                Console.WriteLine($"[GL] Released {freed} shader program(s)");
         }
 
         static void CompactHeap()
@@ -366,6 +416,8 @@ namespace PlayerViewer.UI
         {
             //Aborts any in-flight capture/encode and deletes the temp raw buffer.
             _bufferedExporter?.Dispose();
+            //Kills any specialiser still running.
+            DisposeVariations();
             //Width/Height are 0 when closed while minimized; don't persist that.
             if (WindowState == WindowState.Normal && Width > 0 && Height > 0)
             {
@@ -433,6 +485,7 @@ namespace PlayerViewer.UI
 
             _imgui.Update(this, (float)e.Time);
             DrawUI();
+            PumpVariations();
 
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
             GL.Viewport(0, 0, Width, Height);

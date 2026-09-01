@@ -61,6 +61,15 @@ namespace BfresEditor
             return null;
         }
 
+        public BfshaLibrary.ShaderModel GetBaseShaderModel()
+        {
+            if (MaterialAsset is BfshaRenderer bfshaAsset)
+                return bfshaAsset.BaseShaderModel;
+            return null;
+        }
+
+        public BfshaRenderer GetRenderer() => MaterialAsset as BfshaRenderer;
+
         public BfshaLibrary.ResShaderProgram GetShaderProgram()
         {
             if (MaterialAsset is BfshaRenderer)

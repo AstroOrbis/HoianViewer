@@ -67,6 +67,8 @@ namespace BfresEditor
             Renderer = new BfresRender();
             ((BfresRender)Renderer).Load(this);
             Console.WriteLine($"[BFRES] Renderer.Load: {sw.Elapsed.TotalSeconds:F2}s");
+            if (TegraShaderDecoder.DebugLog)
+                Console.WriteLine(TegraShaderDecoder.TimingReport());
 
             Tag = this;
         }

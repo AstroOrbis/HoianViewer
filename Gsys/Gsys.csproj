@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>Gsys</AssemblyName>
+    <RootNamespace>Gsys</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="BfresLibrary">
+      <HintPath>..\Cafe-Shader-Studio\BfresEditor\Lib\BfresLibrary.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

@@ -20,6 +20,12 @@ namespace BfresEditor
 
         public bool StayInFustrum = true;
 
+        /// <summary>
+        /// Set while the material editor is isolating one material: every other material's
+        /// meshes of this render drop out of the normal passes. Null at every other time.
+        /// </summary>
+        public FMAT IsolateMaterial;
+
         public bool UpdateProbeMap = true;
 
         private System.Threading.Tasks.Task _prefetchTask;

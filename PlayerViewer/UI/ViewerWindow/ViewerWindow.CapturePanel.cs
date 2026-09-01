@@ -36,7 +36,7 @@ namespace PlayerViewer.UI
             DrawPlaybackControls();
 
             float spacing = ImGui.GetStyle().ItemSpacing.Y;
-            float avail = ImGui.GetContentRegionAvail().Y;
+            float avail = VisibleHeightBelowCursor();
             float listH = Math.Max(avail - _measuredCaptureHeight - spacing, 90);
             DrawAnimList(listH);
 
@@ -138,10 +138,20 @@ namespace PlayerViewer.UI
                 return;
             }
 
-            if (standalone && ImGui.Selectable("<BLANK>", currentAnim == null))
+            //null is the blank row, and it is a row the arrows can land on like any other.
+            var rows = new List<string>();
+            void Pick(string name)
             {
-                Play(null);
-                SetPaused(true);
+                Play(name);
+                SetPaused(name == null);
+            }
+
+            if (standalone)
+            {
+                rows.Add(null);
+                if (ImGui.Selectable("<BLANK>", currentAnim == null))
+                    Pick(null);
+                Widgets.KeepRowVisible(AnimListId, currentAnim == null);
             }
             foreach (var name in animNames)
             {
@@ -150,14 +160,19 @@ namespace PlayerViewer.UI
                     && !name.Contains(_animSearch, StringComparison.OrdinalIgnoreCase)
                 )
                     continue;
+                rows.Add(name);
                 if (ImGui.Selectable(name, name == currentAnim))
-                {
-                    Play(name);
-                    SetPaused(false);
-                }
+                    Pick(name);
+                Widgets.KeepRowVisible(AnimListId, name == currentAnim);
             }
+
+            int move = Widgets.ListNav(AnimListId, rows.Count, rows.IndexOf(currentAnim));
+            if (move >= 0)
+                Pick(rows[move]);
             ImGui.EndChild();
         }
+
+        const string AnimListId = "animlist";
 
         //Mirrors the capture-panel selections into the config and persists them; called whenever
         //one changes so they stick between runs.
@@ -347,12 +362,17 @@ namespace PlayerViewer.UI
             ImGui.SetNextItemWidth(-1);
             if (ImGui.BeginCombo("##capres", CaptureSizes[_captureRes].Label))
             {
-                for (int i = 0; i < CaptureSizes.Length; i++)
-                    if (ImGui.Selectable(CaptureSizes[i].Label, i == _captureRes))
+                Widgets.PopupRows(
+                    "capres",
+                    CaptureSizes.Length,
+                    _captureRes,
+                    (row, isSelected) => ImGui.Selectable(CaptureSizes[row].Label, isSelected),
+                    row =>
                     {
-                        _captureRes = i;
+                        _captureRes = row;
                         SaveCaptureSettings();
                     }
+                );
                 ImGui.EndCombo();
             }
 

@@ -238,10 +238,13 @@ namespace GLFrameworkEngine
             GL.UseProgram(0);
         }
 
+        public static event Action<int> Deleting;
+
         public void Dispose() {
             foreach (var shader in shaders)
                 shader.Dispose();
 
+            Deleting?.Invoke(program);
             GL.DeleteProgram(program);
         }
 

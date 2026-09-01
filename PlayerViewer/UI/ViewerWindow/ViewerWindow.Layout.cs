@@ -9,6 +9,8 @@ namespace PlayerViewer.UI
     // Top-level window layout: host window, menu bar, and the romfs-setup screen.
     public partial class ViewerWindow
     {
+        const float LeftPanelWidth = 330;
+
         void DrawUI()
         {
             var viewport = ImGui.GetMainViewport();
@@ -34,15 +36,16 @@ namespace PlayerViewer.UI
                 return;
             }
 
-            float leftWidth = 330;
             float rightWidth = 300;
 
-            ImGui.BeginChild("##left", new Vector2(leftWidth, 0), true);
+            ImGui.BeginChild("##left", new Vector2(LeftPanelWidth, 0), true);
             if (_standalone != null)
                 DrawStandalonePanel();
             else
                 DrawPlayerPanel();
             ImGui.EndChild();
+
+            _pipeline.SelectedMaterial = _standalone != null ? _selectedMaterial : null;
 
             ImGui.SameLine();
             ImGui.BeginChild(
@@ -60,6 +63,8 @@ namespace PlayerViewer.UI
             ImGui.EndChild();
 
             DrawSettingsWindow();
+            DrawMaterialEditorWindow();
+            DrawTextureWindow();
 
             ImGui.End();
         }

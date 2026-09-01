@@ -57,12 +57,16 @@ You can drag `.bfres` or `.bfres.zs` files onto the viewer window to open them a
 
 **Environment**: switch between the Viewer lighting and the AutoWalk stage lighting. You can also toggle Shadow Prepass (the models casting shadows)
 
+**Material Editor**: Edit models' materials and textures with a live preview, and for materials, you are able to generate brand new shader variations, embedding the bfsha directly within the model file.
+
 ## Project layout
 
 ```
 PlayerViewer/          the viewer app
 Cafe-Shader-Studio/    rendering engine
 ShaderLibrary/         shader binary parser
+ShaderBundler/         ubersplicer interface/custom bfsha packer
+Gsys/                  shared shaderopt derivation
 ```
 
 ## Credits
@@ -73,6 +77,6 @@ Various features (supersampler, anim loop export, etc) & CI by [AstroOrbis](http
 
 Original versions of Cafe Shader Studio and ShaderLibrary by [KillzXGaming](https://github.com/killzxgaming).
 
-Initial reference for loading the bphcl file by [RAMDRAGONS](https://github.com/RAMDRAGONS)
+Base reference for loading the bphcl file (+ some bugfixes) by [RAMDRAGONS](https://github.com/RAMDRAGONS)
 
 General assistance with models and stuff [OctoSquiddy](https://github.com/OctoSquiddy)

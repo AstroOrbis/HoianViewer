@@ -63,6 +63,7 @@
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="BCnEncoder.Net" Version="2.3.0" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
     <!-- Transitive runtime dep of Toolbox.Core. -->
     <PackageReference Include="SharpYaml" Version="1.6.5" />
@@ -78,6 +79,7 @@
     <ProjectReference Include="$(CssRoot)\BfresEditor\BfresEditor.csproj" />
     <ProjectReference Include="$(CssRoot)\CafeStudio.UI\CafeStudio.UI.csproj" />
     <ProjectReference Include="$(CssRoot)\GLFrameworkEngine\GLFrameworkEngine.csproj" />
+    <ProjectReference Include="..\ShaderBundler\ShaderBundler.csproj" />
   </ItemGroup>
 
   <!-- Runtime content shared with Cafe Shader Studio (shaders, resources, natives). -->
@@ -199,6 +201,61 @@
     />
   </Target>
 
+  <!-- The shipped product is two executables: the viewer, and the native shader specialiser it
+       drives to generate material variations. UberSlicer builds outside this repo and its two
+       binaries are checked in under tools/uberslicer, one folder per platform; the build takes
+       the one for its RID. The folder is a property a build can point elsewhere, and a tree
+       without the binary still builds - the viewer reports that compilation is unavailable and
+       existence colouring still works. UberspecRunner.FindExecutable probes these names beside
+       the exe. -->
+  <PropertyGroup>
+    <UberSlicerDir Condition="'$(UberSlicerDir)' == ''"
+      >$(MSBuildThisFileDirectory)..\tools\uberslicer\</UberSlicerDir>
+  </PropertyGroup>
+  <Target Name="CopyUberSlicer" AfterTargets="Build">
+    <Copy
+      Condition="'$(ShipWindowsNatives)' == 'true' And Exists('$(UberSlicerDir)win-x64\uberspec.exe')"
+      SourceFiles="$(UberSlicerDir)win-x64\uberspec.exe"
+      DestinationFiles="$(OutDir)uberslicer.exe"
+      SkipUnchangedFiles="true"
+    />
+    <Copy
+      Condition="'$(ShipLinuxNatives)' == 'true' And Exists('$(UberSlicerDir)linux-x64\uberspec')"
+      SourceFiles="$(UberSlicerDir)linux-x64\uberspec"
+      DestinationFiles="$(OutDir)uberslicer"
+      SkipUnchangedFiles="true"
+    />
+    <Exec
+      Condition="'$(ShipLinuxNatives)' == 'true' And '$(OS)' != 'Windows_NT' And Exists('$(OutDir)uberslicer')"
+      Command="chmod +x &quot;$(OutDir)uberslicer&quot;"
+    />
+    <Warning
+      Condition="'$(ShipWindowsNatives)' == 'true' And !Exists('$(UberSlicerDir)win-x64\uberspec.exe')"
+      Text="No win-x64\uberspec.exe in $(UberSlicerDir); the viewer will not be able to generate shader variations."
+    />
+  </Target>
+
+  <!-- Runs after bundling. The single file bundler swallows what it classifies as a native
+       binary, so an exe that has to sit loose beside the published one cannot be Content. -->
+  <Target Name="CopyUberSlicerPublish" AfterTargets="Publish">
+    <Copy
+      Condition="'$(ShipWindowsNatives)' == 'true' And Exists('$(UberSlicerDir)win-x64\uberspec.exe')"
+      SourceFiles="$(UberSlicerDir)win-x64\uberspec.exe"
+      DestinationFiles="$(PublishDir)uberslicer.exe"
+      SkipUnchangedFiles="true"
+    />
+    <Copy
+      Condition="'$(ShipLinuxNatives)' == 'true' And Exists('$(UberSlicerDir)linux-x64\uberspec')"
+      SourceFiles="$(UberSlicerDir)linux-x64\uberspec"
+      DestinationFiles="$(PublishDir)uberslicer"
+      SkipUnchangedFiles="true"
+    />
+    <Exec
+      Condition="'$(ShipLinuxNatives)' == 'true' And '$(OS)' != 'Windows_NT' And Exists('$(PublishDir)uberslicer')"
+      Command="chmod +x &quot;$(PublishDir)uberslicer&quot;"
+    />
+  </Target>
+
   <!-- Runs after bundling, so the resource tree lands on disk beside the exe where the app reads
        it, whatever the bundler decided to do with the individual files. -->
   <Target Name="CopyResourcesPublish" AfterTargets="Publish">
@@ -222,21 +279,20 @@
        The vendored copy carries one fix: upstream sorts export names with the default comparator, 
        but the PE format wants an ordinal sort because GetProcAddress binary searches that table. 
        On singlefilehost, which had a bunch of other symbols, that left NvOptimusEnablement sorted past
-       them and a single file build wouldn't properly target the dedicated GPU. -->
+       them and a single file build wouldn't properly target the dedicated GPU.
+
+       Build with -p:NvPatch=false to skip it, which leaves the exe on the integrated GPU. -->
   <Target
     Name="EnableDiscreteGpu"
     AfterTargets="Build"
-    Condition="'$(TargetsWindows)' == 'true' And Exists('$(TargetDir)$(TargetName).exe')"
+    Condition="'$(TargetsWindows)' == 'true' And '$(NvPatch)' != 'false' And Exists('$(TargetDir)$(TargetName).exe')"
   >
     <Exec
       Command="dotnet run --project &quot;$(MSBuildThisFileDirectory)..\tools\nvpatch\nvpatch.csproj&quot; -c Release -- --enable &quot;$(TargetDir)$(TargetName).exe&quot;"
       ContinueOnError="WarnAndContinue"
     />
   </Target>
-  <Target
-    Name="TrimPublishOutput"
-    AfterTargets="Publish"
-  >
+  <Target Name="TrimPublishOutput" AfterTargets="Publish">
     <ItemGroup>
       <!-- .NET Framework assembly binding redirects, inherited from the vendored projects.
            .NET Core resolves through deps.json and never reads these. Verified by removing them:
@@ -251,7 +307,7 @@
   <Target
     Name="EnableDiscreteGpuPublish"
     AfterTargets="Publish"
-    Condition="'$(TargetsWindows)' == 'true'"
+    Condition="'$(TargetsWindows)' == 'true' And '$(NvPatch)' != 'false'"
   >
     <Exec
       Command="dotnet run --project &quot;$(MSBuildThisFileDirectory)..\tools\nvpatch\nvpatch.csproj&quot; -c Release -- --enable &quot;$(PublishDir)$(TargetName).exe&quot;"

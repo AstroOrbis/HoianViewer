@@ -182,6 +182,9 @@ namespace Toolbox.Core.TextureDecoding
 
                             byte RedPx = Red[(RedCh >> (TY * 12 + TX * 3)) & 7];
 
+                            if (IsSNORM)
+                                RedPx += 0x80;
+
                             Output[OOffset + 0] = RedPx;
                             Output[OOffset + 1] = RedPx;
                             Output[OOffset + 2] = RedPx;

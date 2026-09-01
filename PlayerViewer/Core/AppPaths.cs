@@ -7,13 +7,15 @@ namespace PlayerViewer.Core
     /// <summary>
     /// Per-user data directory, created on first access: %APPDATA%\PlayerViewer on Windows,
     /// ~/.config/PlayerViewer on Linux/macOS. Holds settings.json, an optional bundled ffmpeg, and
-    /// the shader cache when the exe folder is not writable.
+    /// the shader caches when the exe folder is not writable.
     /// </summary>
     public static class AppPaths
     {
         public static string DataDir { get; } = CreateDataDir();
 
-        public static string ShaderCacheDir { get; } = ResolveShaderCacheDir();
+        public static string ShaderCacheDir { get; } = ResolveCacheDir("ShaderCache");
+
+        public static string UberSliceCacheDir { get; } = ResolveCacheDir("UberSliceCache");
 
         static string CreateDataDir()
         {
@@ -25,11 +27,11 @@ namespace PlayerViewer.Core
             return dir;
         }
 
-        static string ResolveShaderCacheDir()
+        static string ResolveCacheDir(string name)
         {
             return IsWritable(AppContext.BaseDirectory)
-                ? Path.Combine(AppContext.BaseDirectory, "ShaderCache")
-                : Path.Combine(DataDir, "ShaderCache");
+                ? Path.Combine(AppContext.BaseDirectory, name)
+                : Path.Combine(DataDir, name);
         }
 
         static bool IsWritable(string dir)

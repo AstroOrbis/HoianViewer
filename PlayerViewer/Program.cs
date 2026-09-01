@@ -30,7 +30,10 @@ namespace PlayerViewer
             if (Environment.GetEnvironmentVariable("mesa_glthread") != null)
                 return;
 
-            try { setenv("mesa_glthread", "false", 0); }
+            try
+            {
+                setenv("mesa_glthread", "false", 0);
+            }
             catch (DllNotFoundException) { } //Not glibc, nothing to opt out of.
             catch (EntryPointNotFoundException) { }
         }

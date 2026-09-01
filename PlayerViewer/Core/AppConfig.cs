@@ -135,6 +135,10 @@ namespace PlayerViewer.Core
         //clip does not jump when it wraps. Independent of the warm-up above.
         public bool PhysicsConverge = true;
 
+        //--- Material editor
+        //Whether the editor may specialise the ubershader.
+        public bool UseSplicer = false;
+
         //--- Capture-panel selections (persisted so they stick between runs)
         public int CaptureResIndex = 2; //index into the resolution dropdown
         public int ExportFormat = 0; //0 PNG, 1 MP4, 2 WebP, 3 WebM

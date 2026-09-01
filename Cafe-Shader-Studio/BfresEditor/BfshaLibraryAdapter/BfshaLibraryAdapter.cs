@@ -17,6 +17,8 @@ namespace BfshaLibrary
 
         public ShaderModelCollection ShaderModels { get; private set; }
 
+        public ShaderLibrary.BfshaFile Inner => _inner;
+
         public BfshaFile() { _inner = new ShaderLibrary.BfshaFile(); ShaderModels = new ShaderModelCollection(_inner); }
         public BfshaFile(string filePath) { _inner = new ShaderLibrary.BfshaFile(filePath); ShaderModels = new ShaderModelCollection(_inner); }
         public BfshaFile(Stream stream) { _inner = new ShaderLibrary.BfshaFile(stream); ShaderModels = new ShaderModelCollection(_inner); }
@@ -88,6 +90,9 @@ namespace BfshaLibrary
         }
 
         public string Name => _inner.Name;
+
+        public ShaderLibrary.ShaderModel Inner => _inner;
+
         public Stream BnshFileStream => _inner.BnshFile != null ? new MemoryStream() : null;
 
         public ShaderOptionDict StaticOptions { get; private set; }

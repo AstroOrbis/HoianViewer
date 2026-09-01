@@ -256,8 +256,22 @@ void main()
         }
 
         MouseState PrevMouseState;
-        KeyboardState PrevKeyboardState;
         readonly List<char> PressedChars = new List<char>();
+
+        readonly HashSet<Key> KeysHeld = new HashSet<Key>();
+        static readonly Key[] AllKeys = (Key[])Enum.GetValues(typeof(Key));
+
+        public void KeyDown(Key key) => KeysHeld.Add(key);
+
+        public void KeyUp(Key key) => KeysHeld.Remove(key);
+
+        /// <summary>
+        /// Drops whatever the OS accumulated while the render loop was not running, on the
+        /// next frame. The wheel is a delta against the cumulative counter Mouse.GetCursorState
+        /// reports, and a modal native dialog blocks this thread, so without this everything
+        /// scrolled over the dialog arrives as one jump the moment it closes.
+        /// </summary>
+        public static bool DiscardPendingInput;
 
         private void UpdateImGuiInput(GameWindow wnd)
         {
@@ -266,14 +280,22 @@ void main()
             if (!wnd.Focused)
             {
                 PrevMouseState = Mouse.GetCursorState();
-                PrevKeyboardState = Keyboard.GetState();
                 io.MouseWheel = 0;
                 io.MouseWheelH = 0;
+                ClearKeys(io);
+                DiscardPendingInput = false;
                 return;
             }
 
             MouseState MouseState = Mouse.GetCursorState();
-            KeyboardState KeyboardState = Keyboard.GetState();
+
+            bool discard = DiscardPendingInput;
+            if (discard)
+            {
+                DiscardPendingInput = false;
+                PrevMouseState = MouseState;
+                PressedChars.Clear();
+            }
 
             io.MouseDown[0] = MouseState.LeftButton == ButtonState.Pressed;
             io.MouseDown[1] = MouseState.RightButton == ButtonState.Pressed;
@@ -286,10 +308,13 @@ void main()
             io.MouseWheel = MouseState.Scroll.Y - PrevMouseState.Scroll.Y;
             io.MouseWheelH = MouseState.Scroll.X - PrevMouseState.Scroll.X;
 
-            foreach (Key key in Enum.GetValues(typeof(Key)))
-            {
-                io.KeysDown[(int)key] = KeyboardState.IsKeyDown(key);
-            }
+            if (discard)
+                ClearKeys(io);
+            else
+                foreach (Key key in AllKeys)
+                {
+                    io.KeysDown[(int)key] = KeysHeld.Contains(key);
+                }
 
             foreach (var c in PressedChars)
             {
@@ -297,13 +322,20 @@ void main()
             }
             PressedChars.Clear();
 
-            io.KeyCtrl = KeyboardState.IsKeyDown(Key.ControlLeft) || KeyboardState.IsKeyDown(Key.ControlRight);
-            io.KeyAlt = KeyboardState.IsKeyDown(Key.AltLeft) || KeyboardState.IsKeyDown(Key.AltRight);
-            io.KeyShift = KeyboardState.IsKeyDown(Key.ShiftLeft) || KeyboardState.IsKeyDown(Key.ShiftRight);
-            io.KeySuper = KeyboardState.IsKeyDown(Key.WinLeft) || KeyboardState.IsKeyDown(Key.WinRight);
+            io.KeyCtrl = !discard && (KeysHeld.Contains(Key.ControlLeft) || KeysHeld.Contains(Key.ControlRight));
+            io.KeyAlt = !discard && (KeysHeld.Contains(Key.AltLeft) || KeysHeld.Contains(Key.AltRight));
+            io.KeyShift = !discard && (KeysHeld.Contains(Key.ShiftLeft) || KeysHeld.Contains(Key.ShiftRight));
+            io.KeySuper = !discard && (KeysHeld.Contains(Key.WinLeft) || KeysHeld.Contains(Key.WinRight));
 
             PrevMouseState = MouseState;
-            PrevKeyboardState = KeyboardState;
+        }
+
+        void ClearKeys(ImGuiIOPtr io)
+        {
+            KeysHeld.Clear();
+            foreach (Key key in AllKeys)
+                io.KeysDown[(int)key] = false;
+            io.KeyCtrl = io.KeyAlt = io.KeyShift = io.KeySuper = false;
         }
 
         public void PressChar(char keyChar)
