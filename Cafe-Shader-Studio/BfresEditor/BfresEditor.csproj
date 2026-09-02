@@ -44,11 +44,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="BfresLibrary">
-      <HintPath>Lib\BfresLibrary.dll</HintPath>
-    </Reference>
-    <ProjectReference Include="..\..\ShaderLibrary\ShaderLibrary.csproj" />
-    <ProjectReference Include="..\..\Gsys\Gsys.csproj" />
+    <ProjectReference Include="..\..\Library\BfresLibrary\BfresLibrary.csproj" />
+    <ProjectReference Include="..\..\Library\ShaderLibrary\ShaderLibrary.csproj" />
+    <ProjectReference Include="..\..\Library\Gsys\Gsys.csproj" />
     <Reference Include="ImGui.NET">
       <HintPath>..\CafeShaderStudio\Lib\ImGui.NET.dll</HintPath>
     </Reference>

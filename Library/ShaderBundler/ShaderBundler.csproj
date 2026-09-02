@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>ShaderBundler</AssemblyName>
+    <RootNamespace>ShaderBundler</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+    <ProjectReference Include="..\ShaderLibrary\ShaderLibrary.csproj" />
+    <ProjectReference Include="..\BfresLibrary\BfresLibrary.csproj" />
+    <Reference Include="Syroot.BinaryData">
+      <HintPath>..\..\Cafe-Shader-Studio\CafeShaderStudio\Lib\Syroot.BinaryData.dll</HintPath>
+    </Reference>
+    <Reference Include="Syroot.Maths">
+      <HintPath>..\..\Cafe-Shader-Studio\CafeShaderStudio\Lib\Syroot.Maths.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

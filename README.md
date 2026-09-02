@@ -1,6 +1,6 @@
 # HoianViewer
 
-Standalone(as in, a separate exe, not part of the game) Splatoon 3 player viewer (and other models viewer), aiming to replicate Splatoon 3's PlayerCustomPart/Mgr stuff and rendering. You can see (almost exactly - there may be bugs, and hair collision is not 100% exact) how your player mods look like in game, or in general make promo-like player renders.
+Standalone(as in, a separate exe, not part of the game) Splatoon 3 player viewer (and other models viewer), aiming to replicate Splatoon 3's PlayerCustomPart/Mgr stuff and rendering. You can see (almost exactly - there may be bugs, and hair collision is not 100% exact) how your player mods look like in game, or in general make promo-like player renders. You can also edit materials of Splatoon 3 models and generate brand new shader variations for them while previewing your changes live.
 
 ## Building
 
@@ -62,11 +62,12 @@ You can drag `.bfres` or `.bfres.zs` files onto the viewer window to open them a
 ## Project layout
 
 ```
-PlayerViewer/          the viewer app
-Cafe-Shader-Studio/    rendering engine
-ShaderLibrary/         shader binary parser
-ShaderBundler/         ubersplicer interface/custom bfsha packer
-Gsys/                  shared shaderopt derivation
+PlayerViewer/                  the viewer app
+Cafe-Shader-Studio/            rendering engine
+Library/ShaderLibrary/         shader binary parser
+Library/BfresLibrary/          bfres binary parser
+Library/ShaderBundler/         ubersplicer interface/custom bfsha packer
+Library/Gsys/                  shared shaderopt derivation
 ```
 
 ## Credits
@@ -75,7 +76,7 @@ The viewer itself, Splatoon 3 Renderer & various fixes by [nvnprogram](https://g
 
 Various features (supersampler, anim loop export, etc) & CI by [AstroOrbis](https://github.com/AstroOrbis).
 
-Original versions of Cafe Shader Studio and ShaderLibrary by [KillzXGaming](https://github.com/killzxgaming).
+Original versions of Cafe Shader Studio, ShaderLibrary & BfresLibrary by [KillzXGaming](https://github.com/killzxgaming).
 
 Base reference for loading the bphcl file (+ some bugfixes) by [RAMDRAGONS](https://github.com/RAMDRAGONS)
 

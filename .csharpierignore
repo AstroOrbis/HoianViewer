@@ -1,6 +1,7 @@
 # only format our own code
 Cafe-Shader-Studio/
-ShaderLibrary/
+Library/ShaderLibrary/
+Library/BfresLibrary/
 tools/nvpatch/
 
 # Build artifacts
