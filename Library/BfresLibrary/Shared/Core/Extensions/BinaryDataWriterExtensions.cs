@@ -560,7 +560,7 @@ namespace BfresLibrary.Core
 
         private static void Write_8_UNorm(this BinaryDataWriter self, Vector4F value)
         {
-            self.Write((byte)(Algebra.Clamp(value.X, 0, 1) * 255));
+            self.Write((byte)System.Math.Round(Algebra.Clamp(value.X, 0, 1) * 255));
         }
 
         private static void Write_8_UInt(this BinaryDataWriter self, Vector4F value)
@@ -601,7 +601,7 @@ namespace BfresLibrary.Core
 
         private static void Write_16_UNorm(this BinaryDataWriter self, Vector4F value)
         {
-            self.Write((ushort)(Algebra.Clamp(value.X, 0, 1) * 65535));
+            self.Write((ushort)System.Math.Round(Algebra.Clamp(value.X, 0, 1) * 65535));
         }
 
         private static void Write_16_UInt(this BinaryDataWriter self, Vector4F value)
@@ -638,8 +638,8 @@ namespace BfresLibrary.Core
 
         private static void Write_8_8_UNorm(this BinaryDataWriter self, Vector4F value)
         {
-            self.Write((byte)(Algebra.Clamp(value.X, 0, 1) * 255));
-            self.Write((byte)(Algebra.Clamp(value.Y, 0, 1) * 255));
+            self.Write((byte)System.Math.Round(Algebra.Clamp(value.X, 0, 1) * 255));
+            self.Write((byte)System.Math.Round(Algebra.Clamp(value.Y, 0, 1) * 255));
         }
 
         private static void Write_8_8_UInt(this BinaryDataWriter self, Vector4F value)
@@ -693,8 +693,8 @@ namespace BfresLibrary.Core
 
         private static void Write_16_16_UNorm(this BinaryDataWriter self, Vector4F value)
         {
-            self.Write((ushort)(Algebra.Clamp(value.X, 0, 1) * 65535));
-            self.Write((ushort)(Algebra.Clamp(value.Y, 0, 1) * 65535));
+            self.Write((ushort)System.Math.Round(Algebra.Clamp(value.X, 0, 1) * 65535));
+            self.Write((ushort)System.Math.Round(Algebra.Clamp(value.Y, 0, 1) * 65535));
         }
 
         private static void Write_16_16_UInt(this BinaryDataWriter self, Vector4F value)
@@ -744,10 +744,10 @@ namespace BfresLibrary.Core
 
         private static void Write_8_8_8_8_UNorm(this BinaryDataWriter self, Vector4F value)
         {
-            self.Write((byte)(Algebra.Clamp(value.X, 0, 1) * 255));
-            self.Write((byte)(Algebra.Clamp(value.Y, 0, 1) * 255));
-            self.Write((byte)(Algebra.Clamp(value.Z, 0, 1) * 255));
-            self.Write((byte)(Algebra.Clamp(value.W, 0, 1) * 255));
+            self.Write((byte)System.Math.Round(Algebra.Clamp(value.X, 0, 1) * 255));
+            self.Write((byte)System.Math.Round(Algebra.Clamp(value.Y, 0, 1) * 255));
+            self.Write((byte)System.Math.Round(Algebra.Clamp(value.Z, 0, 1) * 255));
+            self.Write((byte)System.Math.Round(Algebra.Clamp(value.W, 0, 1) * 255));
         }
 
         private static void Write_8_8_8_8_UInt(this BinaryDataWriter self, Vector4F value)
@@ -852,10 +852,10 @@ namespace BfresLibrary.Core
 
         private static void Write_16_16_16_16_UNorm(this BinaryDataWriter self, Vector4F value)
         {
-            self.Write((ushort)(Algebra.Clamp(value.X, 0, 1) * 65535));
-            self.Write((ushort)(Algebra.Clamp(value.Y, 0, 1) * 65535));
-            self.Write((ushort)(Algebra.Clamp(value.Z, 0, 1) * 65535));
-            self.Write((ushort)(Algebra.Clamp(value.W, 0, 1) * 65535));
+            self.Write((ushort)System.Math.Round(Algebra.Clamp(value.X, 0, 1) * 65535));
+            self.Write((ushort)System.Math.Round(Algebra.Clamp(value.Y, 0, 1) * 65535));
+            self.Write((ushort)System.Math.Round(Algebra.Clamp(value.Z, 0, 1) * 65535));
+            self.Write((ushort)System.Math.Round(Algebra.Clamp(value.W, 0, 1) * 65535));
         }
 
         private static void Write_16_16_16_16_UInt(this BinaryDataWriter self, Vector4F value)
@@ -964,7 +964,7 @@ namespace BfresLibrary.Core
                 throw new ArgumentException($"{value} cannot be converted to Int2 (exceeds range -1 to 1).",
                     nameof(value));
             }
-            return (int)(((uint)value << 30) >> 30) & 0b00000000_00000000_00000000_00000011;
+            return (int)value & 0b00000000_00000000_00000000_00000011;
         }
 
         private static int SingleToInt10(float value)
@@ -974,7 +974,7 @@ namespace BfresLibrary.Core
                 throw new ArgumentException($"{value} cannot be converted to Int10 (exceeds range -512 to 511).",
                     nameof(value));
             }
-            return (int)(((uint)value << 22) >> 22) & 0b00000000_00000000_00000011_11111111;
+            return (int)value & 0b00000000_00000000_00000011_11111111;
         }
 
         private static uint SingleToUInt2(float value)

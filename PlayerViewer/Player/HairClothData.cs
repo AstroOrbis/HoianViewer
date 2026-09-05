@@ -116,6 +116,52 @@ namespace PlayerViewer.Player
                 Fail("no particleDatas");
                 return null;
             }
+            //Per particle bit set of the collidables it collides with; fixed particles carry 0.
+            if (sim.GetValueOrDefault("staticCollisionMasks") is List<object> masks)
+                for (int p = 0; p < masks.Count && p < piece.Particles.Length; p++)
+                    piece.Particles[p].CollisionMask = (uint)Convert.ToInt64(masks[p]);
+
+            //Virtual collision points: extra contact probes on the edges of a free
+            //particle's fan, listed in the game's order (particle, edge, barycentric).
+            if (
+                sim.GetValueOrDefault("virtualCollisionPointsData")
+                is Dictionary<string, object> vcp
+            )
+            {
+                float[] bary = FloatArray(vcp.GetValueOrDefault("edgeBarycentricsDictionary"));
+                var dict = Records(vcp.GetValueOrDefault("edgeDictionaryEntries"))
+                    .Select(d => (start: I(d, "startingBarycentricIndex"), num: I(d, "numBarycentrics")))
+                    .ToArray();
+                var edges = Records(vcp.GetValueOrDefault("edges"))
+                    .Select(e => (opp: I(e, "oppositeRealParticleIndex"), dict: I(e, "barycentricDictionaryIndex")))
+                    .ToArray();
+                var fans = Records(vcp.GetValueOrDefault("edgeFans"))
+                    .Select(f => (owner: I(f, "realParticleIndex"), start: I(f, "edgeStartIndex"), num: I(f, "numEdges")))
+                    .ToArray();
+                int[] fanOf = IntArray(vcp.GetValueOrDefault("edgeFanIndices"));
+                for (int p = 0; p < fanOf.Length; p++)
+                {
+                    int fi = fanOf[p];
+                    if (fi < 0 || fi >= fans.Length || fi == 0xFFFF)
+                        continue;
+                    var fan = fans[fi];
+                    for (int e = fan.start; e < fan.start + fan.num && e < edges.Length; e++)
+                    {
+                        var (opp, di) = edges[e];
+                        if (di < 0 || di >= dict.Length)
+                            continue;
+                        for (int b = dict[di].start; b < dict[di].start + dict[di].num && b < bary.Length; b++)
+                            piece.VirtualPoints.Add(
+                                new HairVirtualPoint
+                                {
+                                    Owner = fan.owner,
+                                    Opposite = opp,
+                                    Barycentric = bary[b],
+                                }
+                            );
+                    }
+                }
+            }
 
             piece.FixedParticles = IntArray(sim.GetValueOrDefault("fixedParticles"));
             piece.TriangleIndices = IntArray(sim.GetValueOrDefault("triangleIndices"));
@@ -195,7 +241,42 @@ namespace PlayerViewer.Player
                                 .ToList();
                             kind = HairConstraintKind.Bend;
                         }
-                        //else: hclBendStiffnessConstraintSet quads (particleA..D) - not simulated.
+                        else if (links[0].ContainsKey("weightA"))
+                        {
+                            //hclBendStiffnessConstraintSet: a linear bending element over
+                            //the four particles around a shared edge.
+                            piece.BendStiffnessLinks = links
+                                .Select(l => new HairBendStiffnessLink
+                                {
+                                    Particles = new[]
+                                    {
+                                        Convert.ToInt32(l.GetValueOrDefault("particleA") ?? 0),
+                                        Convert.ToInt32(l.GetValueOrDefault("particleB") ?? 0),
+                                        Convert.ToInt32(l.GetValueOrDefault("particleC") ?? 0),
+                                        Convert.ToInt32(l.GetValueOrDefault("particleD") ?? 0),
+                                    },
+                                    Weights = new[]
+                                    {
+                                        F(l, "weightA"),
+                                        F(l, "weightB"),
+                                        F(l, "weightC"),
+                                        F(l, "weightD"),
+                                    },
+                                    BendStiffness = F(l, "bendStiffness"),
+                                    RestCurvature = F(l, "restCurvature"),
+                                })
+                                .ToList();
+                            piece.BendStiffnessUseRestPose =
+                                set.GetValueOrDefault("useRestPoseConfig") is bool rest && rest;
+                            piece.BendStiffnessClamp =
+                                set.GetValueOrDefault("clampBendStiffness") is bool clamp && clamp;
+                            piece.BendStiffnessMaxRestHeightSq = set.ContainsKey(
+                                "maxRestPoseHeightSq"
+                            )
+                                ? F(set, "maxRestPoseHeightSq")
+                                : float.MaxValue;
+                            kind = HairConstraintKind.BendStiffness;
+                        }
                     }
                     else if (
                         set.GetValueOrDefault("localConstraints")
@@ -221,14 +302,35 @@ namespace PlayerViewer.Player
                                 MaxNormal = F(l, "maxNormalDistance"),
                                 MinNormal = F(l, "minNormalDistance"),
                                 Stiffness = l.ContainsKey("stiffness")
-                                    ? F(l, "stiffness")
+                                    ? setStiffness * F(l, "stiffness")
                                     : setStiffness,
                             })
                             .ToList();
                         kind = HairConstraintKind.LocalRange;
                     }
-                    else if (set.ContainsKey("perParticleData"))
+                    else if (
+                        set.GetValueOrDefault("perParticleData")
+                        is List<Dictionary<string, object>> perParticle
+                    )
+                    {
+                        piece.TransitionToSimPeriod = set.ContainsKey("toSimPeriod")
+                            ? F(set, "toSimPeriod")
+                            : 1.0f;
+                        piece.Transitions = perParticle
+                            .Select(p => new HairTransition
+                            {
+                                Particle = Convert.ToInt32(
+                                    p.GetValueOrDefault("particleIndex") ?? 0
+                                ),
+                                ReferenceVertex = Convert.ToInt32(
+                                    p.GetValueOrDefault("referenceVertex") ?? 0
+                                ),
+                                ToSimDelay = F(p, "toSimDelay"),
+                                ToSimMaxDistance = F(p, "toSimMaxDistance"),
+                            })
+                            .ToList();
                         kind = HairConstraintKind.Transition;
+                    }
                     piece.ConstraintSetKinds.Add(kind);
                 }
             }
@@ -252,15 +354,52 @@ namespace PlayerViewer.Player
                         collidables[i] as List<Dictionary<string, object>>
                     )?.FirstOrDefault();
                     var shape = col != null ? FirstRecord(col, "shape") : null;
-                    if (shape == null || !shape.ContainsKey("start"))
+                    if (shape == null)
+                        continue;
+                    var kindOfShape = HairCollidableShape.Capsule;
+                    Vector3 start,
+                        end;
+                    float radius;
+                    if (shape.ContainsKey("start"))
+                    {
+                        start = Vec3(shape.GetValueOrDefault("start"));
+                        end = Vec3(shape.GetValueOrDefault("end"));
+                        radius = F(shape, "radius");
+                    }
+                    else if (FirstRecord(shape, "sphere") is Dictionary<string, object> sphere)
+                    {
+                        //hkSphere: centre in xyz, radius in w.
+                        kindOfShape = HairCollidableShape.Sphere;
+                        start = end = Vec3(sphere.GetValueOrDefault("pos"));
+                        radius =
+                            sphere.GetValueOrDefault("pos") is List<object> pv && pv.Count > 3
+                                ? Convert.ToSingle(pv[3])
+                                : 0;
+                    }
+                    else if (shape.ContainsKey("plane"))
+                    {
+                        //Plane normal in xyz, offset in w: points with dot(n, p) + w < 0 are inside.
+                        kindOfShape = HairCollidableShape.Plane;
+                        start = Vec3(shape.GetValueOrDefault("plane"));
+                        end = start;
+                        radius =
+                            shape.GetValueOrDefault("plane") is List<object> pl && pl.Count > 3
+                                ? Convert.ToSingle(pl[3])
+                                : 0;
+                    }
+                    else
                         continue;
                     piece.Collidables.Add(
                         new HairCollidable
                         {
                             Name = Str(col, "name") ?? "",
-                            Start = Vec3(shape.GetValueOrDefault("start")),
-                            End = Vec3(shape.GetValueOrDefault("end")),
-                            Radius = F(shape, "radius"),
+                            VirtualPoints = Convert.ToBoolean(
+                                col.GetValueOrDefault("virtualCollisionPointCollisionEnabled") ?? false
+                            ),
+                            Shape = kindOfShape,
+                            Start = start,
+                            End = end,
+                            Radius = radius,
                             Transform = Mat4(col.GetValueOrDefault("transform")),
                             BoneIndex = i < transformIndices.Length ? transformIndices[i] : 0,
                             BoneOffset = i < offsets.Length ? offsets[i] : Matrix4.Identity,
@@ -296,11 +435,16 @@ namespace PlayerViewer.Player
                             1,
                             Convert.ToInt32(cfg.GetValueOrDefault("numberOfSolveIterations") ?? 1)
                         );
+                        //-1 entries are the collision pass, run in that place.
                         piece.ConstraintExecution = IntArray(
-                                cfg.GetValueOrDefault("constraintExecution")
-                            )
-                            .Where(i => i >= 0)
-                            .ToArray();
+                            cfg.GetValueOrDefault("constraintExecution")
+                        );
+                        piece.UseAllInstanceCollidables = Convert.ToBoolean(
+                            cfg.GetValueOrDefault("useAllInstanceCollidables") ?? true
+                        );
+                        piece.InstanceCollidablesUsed = IntArray(
+                            cfg.GetValueOrDefault("instanceCollidablesUsed")
+                        );
                     }
                     else if (
                         op.GetValueOrDefault("vertexParticlePairs")
@@ -360,10 +504,11 @@ namespace PlayerViewer.Player
                 return null;
             }
 
-            //No simulate config found: execute every parsed set once, authored order.
+            //No simulate config found: execute every parsed set once, authored order, then collide.
             if (piece.ConstraintExecution.Length == 0)
                 piece.ConstraintExecution = Enumerable
                     .Range(0, piece.ConstraintSetKinds.Count)
+                    .Append(-1)
                     .ToArray();
             return piece;
         }
@@ -583,6 +728,21 @@ namespace PlayerViewer.Player
             return Array.Empty<int>();
         }
 
+        static float[] FloatArray(object v)
+        {
+            if (v is List<object> list)
+                return list.Select(x => Convert.ToSingle(x)).ToArray();
+            return Array.Empty<float>();
+        }
+
+        static int I(Dictionary<string, object> d, string key) =>
+            d.GetValueOrDefault(key) is object v ? Convert.ToInt32(v) : 0;
+
+        static IEnumerable<Dictionary<string, object>> Records(object v) =>
+            v is List<Dictionary<string, object>> l ? l
+            : v is List<object> lo ? lo.OfType<Dictionary<string, object>>()
+            : Enumerable.Empty<Dictionary<string, object>>();
+
         static Vector3 Vec3(object v, Vector3? def = null)
         {
             if (v is List<object> list && list.Count >= 3)
@@ -678,12 +838,21 @@ namespace PlayerViewer.Player
         public List<HairLink> StretchLinks = new();
         public List<HairLink> BendLinks = new();
         public List<HairLocalRange> LocalRanges = new();
+        public List<HairBendStiffnessLink> BendStiffnessLinks = new();
+        public bool BendStiffnessUseRestPose;
+        public bool BendStiffnessClamp;
+        public float BendStiffnessMaxRestHeightSq = float.MaxValue;
+        public List<HairTransition> Transitions = new();
+        public float TransitionToSimPeriod = 1.0f;
         public List<HairCollidable> Collidables = new();
+        public List<HairVirtualPoint> VirtualPoints = new();
 
         //Authored solver config (hclSimulateOperator::Config)
         public int SubSteps = 1;
         public int SolveIterations = 1;
         public int[] ConstraintExecution = Array.Empty<int>(); //staticConstraintSets indices, in solve order
+        public bool UseAllInstanceCollidables = true;
+        public int[] InstanceCollidablesUsed = Array.Empty<int>(); //collidable indices the config enables
 
         //Bone write-back (simulated triangles -> bone transforms)
         public List<HairBoneDeform> BoneDeforms = new();
@@ -698,6 +867,30 @@ namespace PlayerViewer.Player
         Bend,
         LocalRange,
         Transition,
+        BendStiffness,
+    }
+
+    public enum HairCollidableShape
+    {
+        Capsule,
+        Sphere,
+        Plane,
+    }
+
+    public class HairBendStiffnessLink
+    {
+        public int[] Particles; //A, B around the shared edge's opposite corners, C, D on the edge
+        public float[] Weights;
+        public float BendStiffness;
+        public float RestCurvature;
+    }
+
+    public class HairTransition
+    {
+        public int Particle,
+            ReferenceVertex;
+        public float ToSimDelay,
+            ToSimMaxDistance;
     }
 
     public class HairParticle
@@ -705,6 +898,7 @@ namespace PlayerViewer.Player
         public float InvMass,
             Radius,
             Friction;
+        public uint CollisionMask = 0xFFFFFFFF; //bit i: collides with collidable i
     }
 
     public class HairSkinVertex
@@ -737,11 +931,20 @@ namespace PlayerViewer.Player
         public float Stiffness = 1.0f;
     }
 
+    public class HairVirtualPoint
+    {
+        public int Owner,
+            Opposite; //the point sits on the edge from the owner to the opposite particle
+        public float Barycentric;
+    }
+
     public class HairCollidable
     {
         public string Name;
+        public bool VirtualPoints; //collides the virtual points too
+        public HairCollidableShape Shape = HairCollidableShape.Capsule;
         public Vector3 Start,
-            End;
+            End; //capsule ends; a sphere's centre in both; a plane's normal in both, offset in Radius
         public float Radius;
         public Matrix4 Transform; //rest/reference transform
         public int BoneIndex; //transform-set index the capsule follows

@@ -8,12 +8,11 @@ namespace PlayerViewer.Player
 {
     /// <summary>
     /// Runtime hair cloth simulation driven by .bphcl data (one instance per cloth
-    /// piece). Particles are verlet-integrated in model space, pinned to the skinned
-    /// animation pose, constrained by the authored link/range sets, collided against
-    /// the authored capsules, and finally written back to the hair bones through the
-    /// triangle-frame bone deform.
-    ///
-    /// Not necessarily perfectly accurate to Havok, since its not based on a proper decomp of Havok clothes.
+    /// piece), based on decomp of havok clothes code in the game: particles
+    /// are verlet-integrated in model space, fixed particles are pinned to the skinned
+    /// animation pose, the constraint sets and the collision pass run in the authored
+    /// execution order, and the driven bones take an orthonormal frame from their
+    /// triangle. The long form of the kernels is in the MarinaHair research notes.
     /// </summary>
     public class HairPhysics
     {
@@ -25,12 +24,19 @@ namespace PlayerViewer.Player
 
         readonly Vector3[] _pos;
         readonly Vector3[] _prev;
+        readonly Vector3[] _before; //positions before the latest step, for the render blend
+        readonly Vector3[] _render; //what the bones are written from
         readonly Vector3[] _skinned; //animation-pose skinned vertices
         readonly Matrix4[] _boneWorld; //current per-frame transform set
         readonly int[] _refVertex; //particle -> reference buffer vertex (-1: none)
-        readonly float[][] _capsuleMinDist; //per collidable x particle: rest-aware pushout distance
+        readonly bool[] _fixed;
         bool _primed;
         float _accumulator;
+        float _lastDt; //the particle time step of the previous step
+        float _transitionTime; //seconds since the release from the animation pose
+        readonly Matrix4[] _colWorld; //collidable poses for this step
+        readonly Matrix4[] _colPrevWorld; //and for the previous one, for their velocity
+        bool _colPrevValid;
 
         //Snapshot of the sim at the first exported frame, and the target an export
         //converges back to so a looping clip does not jump when it wraps.
@@ -38,7 +44,11 @@ namespace PlayerViewer.Player
         Vector3[] _convergePrev;
 
         const float StepTime = 1.0f / 60.0f;
-        const int MaxSubsteps = 4;
+        const int MaxSteps = 4;
+        //After a reset the game holds the hair at the animation pose and runs one second
+        //at 30 calc per sec while the transition set releases it.
+        const float WarmUpStep = 1.0f / 30.0f;
+        const int WarmUpSteps = 30;
 
         HairPhysics(HairClothPiece piece, STBone[] bones)
         {
@@ -49,56 +59,31 @@ namespace PlayerViewer.Player
             int n = piece.Particles.Length;
             _pos = new Vector3[n];
             _prev = new Vector3[n];
+            _before = new Vector3[n];
+            _render = new Vector3[n];
             _skinned = new Vector3[piece.SkinVertices.Length];
             _boneWorld = new Matrix4[piece.BoneRefPose.Length];
+            _fixed = new bool[n];
+            _colWorld = new Matrix4[piece.Collidables.Count];
+            _colPrevWorld = new Matrix4[piece.Collidables.Count];
+            foreach (int f in piece.FixedParticles)
+                if (f >= 0 && f < n)
+                    _fixed[f] = true;
 
-            //Particle -> reference-buffer vertex: MoveParticles pairs (fixed), then
-            //local-range reference vertices, then identity where in range.
+            //Particle -> reference-buffer vertex: identity where in range, then the
+            //transition and local-range entries, then the MoveParticles pairs (fixed).
             _refVertex = new int[n];
             for (int p = 0; p < n; p++)
-            {
                 _refVertex[p] = p < _skinned.Length ? p : -1;
-                foreach (var range in piece.LocalRanges)
-                    if (range.Particle == p)
-                    {
-                        _refVertex[p] = range.ReferenceVertex;
-                        break;
-                    }
-            }
+            foreach (var t in piece.Transitions)
+                if (t.Particle >= 0 && t.Particle < n)
+                    _refVertex[t.Particle] = t.ReferenceVertex;
+            foreach (var range in piece.LocalRanges)
+                if (range.Particle >= 0 && range.Particle < n)
+                    _refVertex[range.Particle] = range.ReferenceVertex;
             foreach (var (vertex, particle) in piece.VertexParticlePairs)
                 if (particle >= 0 && particle < n)
                     _refVertex[particle] = vertex;
-
-            //The authored rest pose legitimately overlaps the collision capsules
-            //(they approximate the head/torso loosely), so collision must not
-            //shove resting hair outward. Per particle+capsule, allow at least the
-            //rest-pose penetration depth.
-            _capsuleMinDist = new float[piece.Collidables.Count][];
-            for (int c = 0; c < piece.Collidables.Count; c++)
-            {
-                var col = piece.Collidables[c];
-                var rest = col.BoneOffset * piece.BoneRefPose[col.BoneIndex];
-                Vector3 a = Vector3.TransformPosition(col.Start, rest);
-                Vector3 b = Vector3.TransformPosition(col.End, rest);
-
-                _capsuleMinDist[c] = new float[n];
-                for (int p = 0; p < n; p++)
-                {
-                    float restDist = DistanceToSegment(piece.RestPositions[p], a, b);
-                    float minDist = col.Radius + piece.Particles[p].Radius;
-                    _capsuleMinDist[c][p] = Math.Min(minDist, restDist);
-                }
-            }
-        }
-
-        static float DistanceToSegment(Vector3 p, Vector3 a, Vector3 b)
-        {
-            Vector3 ab = b - a;
-            float t =
-                ab.LengthSquared > 1e-9f
-                    ? MathHelper.Clamp(Vector3.Dot(p - a, ab) / ab.LengthSquared, 0, 1)
-                    : 0;
-            return (p - (a + ab * t)).Length;
         }
 
         /// <summary>
@@ -118,9 +103,14 @@ namespace PlayerViewer.Player
             var bones = new STBone[piece.BoneNames.Length];
             for (int i = 0; i < bones.Length; i++)
             {
+                string name = piece.BoneNames[i];
+                //The hair model carries its own Spine_3 under Head_Root, unanimated. The
+                //game overwrites its world matrix with the body's Spine_3 every frame, so
+                //the chest capsule follows the spine, not the head.
                 bones[i] =
-                    hairSkeleton.SearchBone(piece.BoneNames[i])
-                    ?? humanSkeleton?.SearchBone(piece.BoneNames[i]);
+                    name == "Spine_3"
+                        ? humanSkeleton?.SearchBone(name) ?? hairSkeleton.SearchBone(name)
+                        : hairSkeleton.SearchBone(name) ?? humanSkeleton?.SearchBone(name);
                 if (bones[i] == null)
                     return null;
             }
@@ -131,6 +121,8 @@ namespace PlayerViewer.Player
         public void Reset()
         {
             _primed = false;
+            _colPrevValid = false;
+            _lastDt = 0;
             _convergePos = null;
             _convergePrev = null;
         }
@@ -147,7 +139,7 @@ namespace PlayerViewer.Player
             _convergePrev = (Vector3[])_prev.Clone();
         }
 
-        /// <summary>Debug: dumps sim state (skinned targets vs particles, capsules).</summary>
+        /// <summary>Debug: dumps sim state (skinned targets vs particles, collidables).</summary>
         public void DebugDump()
         {
             Console.WriteLine($"[HairPhys] {_piece.Name}");
@@ -155,7 +147,7 @@ namespace PlayerViewer.Player
             {
                 Vector3 target = SkinnedForParticle(p);
                 Console.WriteLine(
-                    $"  p{p}{(IsFixed(p) ? " FIX" : "    ")} pos=({_pos[p].X:F3},{_pos[p].Y:F3},{_pos[p].Z:F3}) "
+                    $"  p{p}{(_fixed[p] ? " FIX" : "    ")} pos=({_pos[p].X:F3},{_pos[p].Y:F3},{_pos[p].Z:F3}) "
                         + $"skin=({target.X:F3},{target.Y:F3},{target.Z:F3}) drift={(_pos[p] - target).Length:F3}"
                 );
             }
@@ -164,7 +156,7 @@ namespace PlayerViewer.Player
                 Vector3 c = _skinned[range.ReferenceVertex];
                 float d = (_pos[range.Particle] - c).Length;
                 Console.WriteLine(
-                    $"  range p{range.Particle} ref=v{range.ReferenceVertex} r={range.Radius:F3} dist={d:F3}{(d > range.Radius + 0.001f ? " VIOLATED" : "")}"
+                    $"  range p{range.Particle} ref=v{range.ReferenceVertex} r={range.Radius:F3} k={range.Stiffness:F3} dist={d:F3}"
                 );
             }
             foreach (var col in _piece.Collidables)
@@ -173,7 +165,7 @@ namespace PlayerViewer.Player
                 Vector3 a = Vector3.TransformPosition(col.Start, world);
                 Vector3 b = Vector3.TransformPosition(col.End, world);
                 Console.WriteLine(
-                    $"  capsule '{col.Name}' bone={_piece.BoneNames[col.BoneIndex]} r={col.Radius:F3} "
+                    $"  {col.Shape} '{col.Name}' bone={_piece.BoneNames[col.BoneIndex]} r={col.Radius:F3} "
                         + $"a=({a.X:F3},{a.Y:F3},{a.Z:F3}) b=({b.X:F3},{b.Y:F3},{b.Z:F3})"
                 );
             }
@@ -194,33 +186,40 @@ namespace PlayerViewer.Player
             if (!Enabled)
                 return;
 
-            //Snapshot the animation pose transform set.
             for (int i = 0; i < _bones.Length; i++)
-                _boneWorld[i] = _bones[i].Transform;
+                _boneWorld[i] = UnitAxes(_bones[i].Transform);
 
             SkinVertices();
 
             if (!_primed)
             {
-                //Start from the authored rest shape carried to the current pose by
-                //the cloth root bone (refpose of bone 0 is identity). Skin-buffer
-                //lookups can't be used here: dynamic particles have no reliable
-                //buffer mapping in every asset.
-                var restToWorld = Matrix4.Invert(_piece.BoneRefPose[0]) * _boneWorld[0];
+                //The game starts a cloth pinned to its animation pose, then lets the
+                //transition set release it over one second of 30 Hz steps.
                 for (int p = 0; p < _pos.Length; p++)
-                    _pos[p] = _prev[p] = Vector3.TransformPosition(
-                        _piece.RestPositions[p],
-                        restToWorld
-                    );
+                    _pos[p] = _prev[p] = SkinnedForParticle(p);
+                _transitionTime = 0;
+                _lastDt = 0;
+                _colPrevValid = false;
                 _primed = true;
+                for (int i = 0; i < WarmUpSteps; i++)
+                    Step(WarmUpStep);
+                Array.Copy(_pos, _before, _pos.Length);
+                _accumulator = 0;
             }
 
-            _accumulator = Math.Min(_accumulator + dt, StepTime * MaxSubsteps);
+            //The animation advances every rendered frame, so above 60 fps the bones are written
+            //from the particles blended between the last two steps by the backlog fraction;
+            //otherwise, the hair moves in jittery 60 Hz jumps against the head.
+            _accumulator = Math.Min(_accumulator + dt, StepTime * MaxSteps);
             while (_accumulator >= StepTime)
             {
+                Array.Copy(_pos, _before, _pos.Length);
                 Step(StepTime);
                 _accumulator -= StepTime;
             }
+            float alpha = MathHelper.Clamp(_accumulator / StepTime, 0, 1);
+            for (int p = 0; p < _pos.Length; p++)
+                _render[p] = _before[p] + (_pos[p] - _before[p]) * alpha;
 
             //Blend toward the captured pose before the bones are written, so the frame
             //that gets rendered is the blended one.
@@ -231,10 +230,33 @@ namespace PlayerViewer.Player
                 {
                     _pos[p] += (_convergePos[p] - _pos[p]) * w;
                     _prev[p] += (_convergePrev[p] - _prev[p]) * w;
+                    _render[p] = _pos[p];
                 }
             }
 
             WriteBones(arrange);
+        }
+
+        /// <summary>
+        /// The pose with its scale removed
+        /// </summary>
+        static Matrix4 UnitAxes(Matrix4 m)
+        {
+            Vector3 x = m.Row0.Xyz;
+            if (x.LengthSquared < 1e-20f)
+                return m;
+            x.Normalize();
+            Vector3 z = Vector3.Cross(x, m.Row1.Xyz);
+            if (z.LengthSquared < 1e-20f)
+                return m;
+            z.Normalize();
+            Vector3 y = Vector3.Cross(z, x);
+            return new Matrix4(
+                new Vector4(x, 0),
+                new Vector4(y, 0),
+                new Vector4(z, 0),
+                m.Row3
+            );
         }
 
         Vector3 SkinnedForParticle(int particle)
@@ -279,42 +301,61 @@ namespace PlayerViewer.Player
             int subSteps = Math.Clamp(piece.SubSteps, 1, 8);
             float subDt = dt / subSteps;
 
+            //A changed step keeps the velocity, not the per step displacement.
+            if (_lastDt > 0 && _lastDt != subDt)
+            {
+                float keep = 1.0f - subDt / _lastDt;
+                for (int p = 0; p < _pos.Length; p++)
+                    _prev[p] += (_pos[p] - _prev[p]) * keep;
+            }
+            _lastDt = subDt;
+
+            for (int c = 0; c < piece.Collidables.Count; c++)
+                _colWorld[c] =
+                    piece.Collidables[c].BoneOffset * _boneWorld[piece.Collidables[c].BoneIndex];
+            if (!_colPrevValid)
+            {
+                Array.Copy(_colWorld, _colPrevWorld, _colWorld.Length);
+                _colPrevValid = true;
+            }
+
             for (int s = 0; s < subSteps; s++)
             {
-                //Pin fixed particles to the animation pose.
+                //Fixed particles sit at their skinned positions with no velocity.
                 foreach (int f in piece.FixedParticles)
-                {
-                    Vector3 target = SkinnedForParticle(f);
-                    _prev[f] = _pos[f];
-                    _pos[f] = target;
-                }
+                    _prev[f] = _pos[f] = SkinnedForParticle(f);
 
                 //Verlet integration for dynamic particles.
-                float damping = MathF.Pow(1.0f - piece.DampingPerSecond, subDt);
+                float d = piece.DampingPerSecond;
+                float damping = d >= 1 ? 0 : d == 0 ? 1 : MathF.Pow(1.0f - d, subDt);
                 Vector3 gravityStep = piece.Gravity * subDt * subDt;
                 for (int p = 0; p < _pos.Length; p++)
                 {
-                    if (piece.Particles[p].InvMass <= 0 || IsFixed(p))
+                    if (piece.Particles[p].InvMass <= 0 || _fixed[p])
                         continue;
                     Vector3 velocity = (_pos[p] - _prev[p]) * damping;
                     _prev[p] = _pos[p];
                     _pos[p] += velocity + gravityStep;
                 }
 
-                //Constraints run in the authored execution order (hclSimulateOperator
-                //config), the authored number of times. Stiffness is applied as-is;
-                //values >1 just clamp (authored data uses e.g. 1.25/3.33 for near-rigid
-                //links and 0.4 for soft strand tips).
+                //The authored execution order, the authored number of times; -1 is the
+                //collision pass in its place.
                 for (int iter = 0; iter < Math.Clamp(piece.SolveIterations, 1, 8); iter++)
                     foreach (int setIndex in piece.ConstraintExecution)
-                        SolveConstraintSet(
-                            setIndex < piece.ConstraintSetKinds.Count
-                                ? piece.ConstraintSetKinds[setIndex]
-                                : HairConstraintKind.Unknown
-                        );
+                    {
+                        if (setIndex < 0)
+                            SolveCollisions(s, subSteps);
+                        else
+                            SolveConstraintSet(
+                                setIndex < piece.ConstraintSetKinds.Count
+                                    ? piece.ConstraintSetKinds[setIndex]
+                                    : HairConstraintKind.Unknown
+                            );
+                    }
 
-                SolveCapsules();
+                _transitionTime += subDt;
             }
+            Array.Copy(_colWorld, _colPrevWorld, _colWorld.Length);
         }
 
         void SolveConstraintSet(HairConstraintKind kind)
@@ -323,143 +364,376 @@ namespace PlayerViewer.Player
             switch (kind)
             {
                 case HairConstraintKind.Standard:
-                    //Spring toward rest length.
                     foreach (var link in piece.StandardLinks)
-                        SolveDistance(
-                            link.A,
-                            link.B,
-                            link.RestLength,
-                            Math.Min(link.Stiffness, 1),
-                            onlyIfLonger: false
-                        );
+                        SolveStandard(link);
                     break;
 
                 case HairConstraintKind.Stretch:
-                    //Hard upper bound on length.
                     foreach (var link in piece.StretchLinks)
-                        SolveDistance(
-                            link.A,
-                            link.B,
-                            link.RestLength,
-                            Math.Min(link.Stiffness, 1),
-                            onlyIfLonger: true
-                        );
+                        SolveStretch(link);
                     break;
 
                 case HairConstraintKind.Bend:
-                    //Keep within [bendMinLength, stretchMaxLength].
                     foreach (var link in piece.BendLinks)
-                    {
-                        float d = (_pos[link.B] - _pos[link.A]).Length;
-                        if (d < link.MinLength)
-                            SolveDistance(
-                                link.A,
-                                link.B,
-                                link.MinLength,
-                                Math.Clamp(link.BendStiffness, 0, 1),
-                                onlyIfLonger: false
-                            );
-                        else if (d > link.MaxLength)
-                            SolveDistance(
-                                link.A,
-                                link.B,
-                                link.MaxLength,
-                                Math.Clamp(link.StretchStiffness, 0, 1),
-                                onlyIfLonger: true
-                            );
-                    }
+                        SolveBendLink(link);
                     break;
 
                 case HairConstraintKind.LocalRange:
-                    //Keep particles inside a sphere around their skinned reference
-                    //position (stops hair drifting off the head). Stiffness < 1
-                    //(localStiffnessConstraints) pulls back softly instead of
-                    //hard-clamping to the sphere surface.
                     foreach (var range in piece.LocalRanges)
-                    {
-                        if (IsFixed(range.Particle))
-                            continue;
-                        Vector3 center = _skinned[range.ReferenceVertex];
-                        Vector3 delta = _pos[range.Particle] - center;
-                        float dist = delta.Length;
-                        if (dist > range.Radius && dist > 1e-7f)
-                        {
-                            Vector3 clamped = center + delta * (range.Radius / dist);
-                            _pos[range.Particle] = Vector3.Lerp(
-                                _pos[range.Particle],
-                                clamped,
-                                Math.Clamp(range.Stiffness, 0, 1)
-                            );
-                        }
-                    }
+                        SolveLocalRange(range);
+                    break;
+
+                case HairConstraintKind.Transition:
+                    SolveTransition();
+                    break;
+
+                case HairConstraintKind.BendStiffness:
+                    foreach (var link in piece.BendStiffnessLinks)
+                        SolveBendStiffness(link);
                     break;
             }
         }
 
-        bool IsFixed(int particle) => Array.IndexOf(_piece.FixedParticles, particle) >= 0;
+        float InvMass(int p) => _fixed[p] ? 0 : _piece.Particles[p].InvMass;
 
-        void SolveDistance(int a, int b, float restLength, float stiffness, bool onlyIfLonger)
+        /// <summary>Two sided spring to the rest length: each end takes stiffness times its own inverse mass of the error.</summary>
+        void SolveStandard(HairLink link)
         {
-            Vector3 delta = _pos[b] - _pos[a];
-            float dist = delta.Length;
-            if (dist < 1e-7f)
+            Vector3 d = _pos[link.B] - _pos[link.A];
+            float len = d.Length;
+            if (len <= 0)
                 return;
-            if (onlyIfLonger && dist <= restLength)
-                return;
-
-            float wa = IsFixed(a) ? 0 : _piece.Particles[a].InvMass;
-            float wb = IsFixed(b) ? 0 : _piece.Particles[b].InvMass;
-            float wSum = wa + wb;
-            if (wSum <= 0)
-                return;
-
-            Vector3 correction = delta * ((dist - restLength) / dist) * stiffness;
-            _pos[a] += correction * (wa / wSum);
-            _pos[b] -= correction * (wb / wSum);
+            Vector3 corr = d * (link.Stiffness * (len - link.RestLength) / len);
+            _pos[link.A] += corr * InvMass(link.A);
+            _pos[link.B] -= corr * InvMass(link.B);
         }
 
-        void SolveCapsules()
+        /// <summary>One sided maximum length: only particle B moves, by stiffness times the excess, whatever the masses.</summary>
+        void SolveStretch(HairLink link)
         {
-            for (int c = 0; c < _piece.Collidables.Count; c++)
+            Vector3 d = _pos[link.B] - _pos[link.A];
+            float len = d.Length;
+            if (len <= 0)
+                return;
+            float s = link.Stiffness * Math.Min(link.RestLength - len, 0);
+            _pos[link.B] += d * (s / len);
+        }
+
+        /// <summary>A [min, max] band on the chord, each side with its own stiffness.</summary>
+        void SolveBendLink(HairLink link)
+        {
+            Vector3 d = _pos[link.B] - _pos[link.A];
+            float len = d.Length;
+            if (len <= 0)
+                return;
+            float s =
+                Math.Max(0, len - link.MaxLength) * link.StretchStiffness
+                - Math.Max(0, link.MinLength - len) * link.BendStiffness;
+            Vector3 corr = d * (s / len);
+            _pos[link.A] += corr * InvMass(link.A);
+            _pos[link.B] -= corr * InvMass(link.B);
+        }
+
+        /// <summary>Pull toward the skinned reference by stiffness times the distance outside the sphere.</summary>
+        void SolveLocalRange(HairLocalRange range)
+        {
+            if (_fixed[range.Particle])
+                return;
+            Vector3 center = _skinned[range.ReferenceVertex];
+            Vector3 d = _pos[range.Particle] - center + new Vector3(float.Epsilon);
+            float len = d.Length;
+            if (len <= 0)
+                return;
+            float s = Math.Min(range.Stiffness * (range.Radius - len), 0);
+            _pos[range.Particle] += d * (s / len);
+        }
+
+        /// <summary>
+        /// The release from the animation pose after a reset: for the transition period
+        /// each particle may sit at most (t - delay) / period of its maximum distance
+        /// from its reference. Steady state does nothing.
+        /// </summary>
+        void SolveTransition()
+        {
+            float period = _piece.TransitionToSimPeriod;
+            if (period <= 0)
+                return;
+            foreach (var t in _piece.Transitions)
             {
-                var col = _piece.Collidables[c];
-                //Capsule -> model space: collidable offset then the bone transform.
-                var world = col.BoneOffset * _boneWorld[col.BoneIndex];
-                Vector3 a = Vector3.TransformPosition(col.Start, world);
-                Vector3 b = Vector3.TransformPosition(col.End, world);
-
-                for (int p = 0; p < _pos.Length; p++)
+                if (_fixed[t.Particle] || t.ReferenceVertex >= _skinned.Length)
+                    continue;
+                float u = _transitionTime - t.ToSimDelay;
+                if (u >= period)
+                    break;
+                Vector3 reference = _skinned[t.ReferenceVertex];
+                if (u <= 0)
                 {
-                    if (IsFixed(p) || _piece.Particles[p].InvMass <= 0)
-                        continue;
-                    float minDist = _capsuleMinDist[c][p];
-                    if (minDist <= 0)
-                        continue;
-
-                    //Closest point on segment ab.
-                    Vector3 ab = b - a;
-                    float t =
-                        ab.LengthSquared > 1e-9f
-                            ? MathHelper.Clamp(
-                                Vector3.Dot(_pos[p] - a, ab) / ab.LengthSquared,
-                                0,
-                                1
-                            )
-                            : 0;
-                    Vector3 closest = a + ab * t;
-
-                    Vector3 delta = _pos[p] - closest;
-                    float dist = delta.Length;
-                    if (dist < minDist && dist > 1e-7f)
-                        _pos[p] = closest + delta * (minDist / dist);
+                    _pos[t.Particle] = reference;
+                    continue;
                 }
+                float maxDist = u / period * t.ToSimMaxDistance;
+                Vector3 d = _pos[t.Particle] - reference;
+                float len = d.Length;
+                if (len > maxDist && len > 0)
+                    _pos[t.Particle] = reference + d * (maxDist / len);
             }
         }
 
         /// <summary>
-        /// Triangle-frame bone deform (hclSimpleMeshBoneDeformOperator): for each
-        /// driven bone, Frame rows = [p0-c, p1-c, cross(e1,e2)/3, c] built from its
-        /// source triangle, then Bone = LocalBoneTransform * Frame.
+        /// Linear bending element over the four particles around a shared edge: the
+        /// weighted sum of the positions (with the rest curvature added along the average
+        /// normal in the rest pose variant) is applied back to each by its weight, inverse
+        /// mass and the authored, possibly negative, stiffness.
+        /// </summary>
+        void SolveBendStiffness(HairBendStiffnessLink link)
+        {
+            var piece = _piece;
+            int[] ps = link.Particles;
+            float[] w = link.Weights;
+            Vector3 v = Vector3.Zero;
+            for (int i = 0; i < 4; i++)
+                v += _pos[ps[i]] * w[i];
+            float k = link.BendStiffness;
+            if (piece.BendStiffnessUseRestPose)
+            {
+                Vector3 c = _pos[ps[2]];
+                Vector3 dc = _pos[ps[3]] - c;
+                Vector3 n1 = Vector3.Cross(dc, _pos[ps[0]] - c);
+                Vector3 n2 = Vector3.Cross(_pos[ps[1]] - c, dc);
+                float e2 = dc.LengthSquared;
+                float l1 = n1.Length,
+                    l2 = n2.Length;
+                if (e2 <= 0 || l1 <= 0 || l2 <= 0)
+                    return;
+                float h = l1 * l2 / e2 * link.RestCurvature;
+                if (piece.BendStiffnessClamp && h * h > piece.BendStiffnessMaxRestHeightSq)
+                    k = 0;
+                Vector3 avg = n1 / l1 + n2 / l2;
+                if (avg.LengthSquared > 0)
+                    v += avg.Normalized() * h;
+            }
+            for (int i = 0; i < 4; i++)
+                _pos[ps[i]] += v * (InvMass(ps[i]) * w[i] * k);
+        }
+
+        /// <summary>
+        /// The collision pass: every free particle is pushed to the surface of each
+        /// enabled shape plus its own radius, and its previous position is moved so the
+        /// contact is inelastic along the normal with the tangential velocity scaled by
+        /// the particle's friction. Fixed particles never collide.
+        /// </summary>
+        void SolveCollisions(int subStep, int subSteps)
+        {
+            var piece = _piece;
+            float fraction = (subStep + 1) / (float)subSteps;
+            for (int pass = 0; pass < 2; pass++)
+                for (int c = 0; c < piece.Collidables.Count; c++)
+                {
+                    if (
+                        !piece.UseAllInstanceCollidables
+                        && Array.IndexOf(piece.InstanceCollidablesUsed, c) < 0
+                    )
+                        continue;
+                    var col = piece.Collidables[c];
+                    if (pass == 1 && (!col.VirtualPoints || piece.VirtualPoints.Count == 0))
+                        continue;
+                    Matrix4 world = _colWorld[c];
+                    Matrix4 old = _colPrevWorld[c];
+                    Vector3 linDt = (world.Row3.Xyz - old.Row3.Xyz) / subSteps;
+                    Vector3 angDt = RotationDelta(old, world) / subSteps;
+                    world.Row3.Xyz = old.Row3.Xyz + linDt * subSteps * fraction;
+                    var shape = new ShapePose(col, world);
+                    if (!shape.Valid)
+                        continue;
+                    uint bit = c < 32 ? 1u << c : 0;
+
+                    if (pass == 0)
+                    {
+                        for (int p = 0; p < _pos.Length; p++)
+                        {
+                            if (_fixed[p] || piece.Particles[p].InvMass <= 0)
+                                continue;
+                            if ((piece.Particles[p].CollisionMask & bit) == 0)
+                                continue;
+                            if (
+                                shape.PushOut(
+                                    _pos[p],
+                                    piece.Particles[p].Radius,
+                                    out Vector3 pushed,
+                                    out Vector3 n,
+                                    out Vector3 surface
+                                )
+                            )
+                            {
+                                _pos[p] = pushed;
+                                Contact(p, n, surface, shape.Centre, linDt, angDt);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        foreach (var vp in piece.VirtualPoints)
+                        {
+                            int o = vp.Owner;
+                            if (
+                                o < 0
+                                || o >= _pos.Length
+                                || vp.Opposite < 0
+                                || vp.Opposite >= _pos.Length
+                            )
+                                continue;
+                            if (_fixed[o] || piece.Particles[o].InvMass <= 0)
+                                continue;
+                            if ((piece.Particles[o].CollisionMask & bit) == 0)
+                                continue;
+                            Vector3 m = _pos[o] + (_pos[vp.Opposite] - _pos[o]) * vp.Barycentric;
+                            if (
+                                shape.PushOut(
+                                    m,
+                                    piece.Particles[o].Radius,
+                                    out Vector3 pushed,
+                                    out _,
+                                    out _
+                                )
+                            )
+                                _pos[o] += pushed - m;
+                        }
+                    }
+                }
+        }
+
+        /// <summary>One collidable at one pose: closest point and push out for its shape.</summary>
+        readonly struct ShapePose
+        {
+            readonly HairCollidableShape _shape;
+            readonly Vector3 _a,
+                _b,
+                _normal;
+            readonly float _radius,
+                _planeOffset;
+            public readonly Vector3 Centre;
+            public readonly bool Valid;
+
+            public ShapePose(HairCollidable col, Matrix4 world)
+            {
+                _shape = col.Shape;
+                _radius = col.Radius;
+                Centre = world.Row3.Xyz;
+                _a = Vector3.TransformPosition(col.Start, world);
+                _b = Vector3.TransformPosition(col.End, world);
+                _normal = Vector3.Zero;
+                _planeOffset = 0;
+                Valid = true;
+                if (col.Shape == HairCollidableShape.Plane)
+                {
+                    //The plane is authored as (normal, offset); carry it through the
+                    //transform as a point on it and its normal.
+                    Vector3 point = Vector3.TransformPosition(col.Start * -col.Radius, world);
+                    _normal = Vector3.TransformNormal(col.Start, world);
+                    Valid = _normal.LengthSquared > 0;
+                    if (Valid)
+                    {
+                        _normal.Normalize();
+                        _planeOffset = -Vector3.Dot(_normal, point);
+                    }
+                }
+            }
+
+            public bool PushOut(
+                Vector3 p,
+                float particleRadius,
+                out Vector3 pushed,
+                out Vector3 n,
+                out Vector3 surface
+            )
+            {
+                pushed = p;
+                n = Vector3.Zero;
+                surface = p;
+                if (_shape == HairCollidableShape.Plane)
+                {
+                    float depth = Vector3.Dot(_normal, p) + _planeOffset - particleRadius;
+                    if (depth >= 0)
+                        return false;
+                    n = _normal;
+                    pushed = p - _normal * depth;
+                    surface = pushed - _normal * particleRadius;
+                    return true;
+                }
+                Vector3 closest = _a;
+                if (_shape == HairCollidableShape.Capsule)
+                {
+                    Vector3 ab = _b - _a;
+                    float t =
+                        ab.LengthSquared > 1e-9f
+                            ? MathHelper.Clamp(Vector3.Dot(p - _a, ab) / ab.LengthSquared, 0, 1)
+                            : 0;
+                    closest = _a + ab * t;
+                }
+                Vector3 delta = p - closest;
+                float dist = delta.Length;
+                if (dist >= _radius + particleRadius || dist <= 1e-7f)
+                    return false;
+                n = delta / dist;
+                surface = closest + n * _radius;
+                pushed = surface + n * particleRadius;
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Rotation from one pose to the next as an angle times axis vector, for the
+        /// row vector matrices the scene uses.
+        /// </summary>
+        static Vector3 RotationDelta(Matrix4 from, Matrix4 to)
+        {
+            Matrix3 a = new Matrix3(from);
+            Matrix3 b = new Matrix3(to);
+            a.Row0.Normalize();
+            a.Row1.Normalize();
+            a.Row2.Normalize();
+            b.Row0.Normalize();
+            b.Row1.Normalize();
+            b.Row2.Normalize();
+            a.Transpose();
+            Matrix3 d = a * b;
+            var axis = new Vector3(d.M23 - d.M32, d.M31 - d.M13, d.M12 - d.M21);
+            float len = axis.Length;
+            if (len < 1e-7f)
+                return Vector3.Zero;
+            float cos = MathHelper.Clamp((d.Trace - 1.0f) * 0.5f, -1.0f, 1.0f);
+            return axis * (MathF.Acos(cos) / len);
+        }
+
+        /// <summary>
+        /// Contact response on the previous position: the displacement relative to the
+        /// collidable's own motion, less its normal part, is added back scaled by the
+        /// particle's friction. The push out velocity itself is kept.
+        /// </summary>
+        void Contact(
+            int p,
+            Vector3 n,
+            Vector3 surface,
+            Vector3 centre,
+            Vector3 linDt,
+            Vector3 angDt
+        )
+        {
+            Vector3 colDt = linDt + Vector3.Cross(angDt, surface - centre);
+            Vector3 rel = _pos[p] - _prev[p] - colDt;
+            rel -= n * Vector3.Dot(n, rel);
+            _prev[p] += rel * _piece.Particles[p].Friction;
+        }
+
+        /// <summary>
+        /// Simple mesh bone deform: for each driven bone the frame rows are
+        /// [p0 - c, p1 - c, cross(p0 - c, p1 - c), c] of its source triangle, the raw
+        /// product Local * Frame gives the translation, and the rotation is rebuilt
+        /// orthonormal from the raw axes with the boneAxis column kept exact, so no
+        /// scale or shear from the triangle reaches the bone. Havok then blends the
+        /// cloth frame with the skeleton's world matrix by the bone's AnimReduceRt (1 pure
+        /// cloth, 0 the arranged pose) and re-orthonormalises; the skeleton's scale is
+        /// kept on the axes so a collapsed bone stays collapsed.
         /// </summary>
         void WriteBones(Dictionary<string, ArrangeBoneParam> arrange)
         {
@@ -469,43 +743,78 @@ namespace PlayerViewer.Player
                 if (bd.TriangleStart + 2 >= _piece.TriangleIndices.Length)
                     continue;
 
-                //Arrange-collapsed bone: keep the welded (collapsed) transform.
-                if (
-                    arrange != null
-                    && arrange.TryGetValue(_driven[i].Name, out var arr)
-                    && arr.Scale.X * arr.Scale.Y * arr.Scale.Z < 0.001f
-                )
+                float weight = 1.0f;
+                if (arrange != null && arrange.TryGetValue(_driven[i].Name, out var arr))
+                    weight = MathHelper.Clamp(arr.AnimReduce, 0, 1);
+                if (weight <= 0)
                     continue;
 
-                Vector3 p0 = _pos[_piece.TriangleIndices[bd.TriangleStart]];
-                Vector3 p1 = _pos[_piece.TriangleIndices[bd.TriangleStart + 1]];
-                Vector3 p2 = _pos[_piece.TriangleIndices[bd.TriangleStart + 2]];
+                Vector3 p0 = _render[_piece.TriangleIndices[bd.TriangleStart]];
+                Vector3 p1 = _render[_piece.TriangleIndices[bd.TriangleStart + 1]];
+                Vector3 p2 = _render[_piece.TriangleIndices[bd.TriangleStart + 2]];
 
-                Vector3 c = (p0 + p1 + p2) / 3.0f;
-                Vector3 n = Vector3.Cross(p1 - p0, p2 - p0) / 3.0f;
-                Vector3 r0 = p0 - c,
-                    r1 = p1 - c;
+                Vector3 c = (p0 + p1 + p2) * (1.0f / 3.0f);
+                Vector3 e0 = p0 - c,
+                    e1 = p1 - c;
+                Vector3 n = Vector3.Cross(e0, e1);
 
                 var frame = new Matrix4(
-                    r0.X,
-                    r0.Y,
-                    r0.Z,
-                    0,
-                    r1.X,
-                    r1.Y,
-                    r1.Z,
-                    0,
-                    n.X,
-                    n.Y,
-                    n.Z,
-                    0,
-                    c.X,
-                    c.Y,
-                    c.Z,
-                    1
+                    new Vector4(e0, 0),
+                    new Vector4(e1, 0),
+                    new Vector4(n, 0),
+                    new Vector4(c, 1)
                 );
+                Matrix4 raw = bd.LocalBoneTransform * frame;
+                Vector3 r0 = raw.Row0.Xyz,
+                    r2 = raw.Row2.Xyz;
+                Vector3 x,
+                    y,
+                    z;
+                if (_piece.BoneAxis == 0)
+                {
+                    x = r0.Normalized();
+                    y = Vector3.Cross(r2, x).Normalized();
+                    z = Vector3.Cross(x, y).Normalized();
+                }
+                else
+                {
+                    z = r2.Normalized();
+                    y = Vector3.Cross(z, r0).Normalized();
+                    x = Vector3.Cross(y, z).Normalized();
+                }
+                Vector3 t = raw.Row3.Xyz;
 
-                _driven[i].Transform = bd.LocalBoneTransform * frame;
+                Matrix4 skeleton = _driven[i].Transform;
+                Vector3 sx = skeleton.Row0.Xyz,
+                    sy = skeleton.Row1.Xyz,
+                    sz = skeleton.Row2.Xyz;
+                if (weight < 1)
+                {
+                    //Blend the axes toward the skeleton's directions, then rebuild an
+                    //orthonormal frame around the blended bone axis.
+                    x = Vector3.Lerp(sx.Normalized(), x, weight);
+                    y = Vector3.Lerp(sy.Normalized(), y, weight);
+                    z = Vector3.Lerp(sz.Normalized(), z, weight);
+                    if (_piece.BoneAxis == 0)
+                    {
+                        x.Normalize();
+                        y = Vector3.Cross(z, x).Normalized();
+                        z = Vector3.Cross(x, y).Normalized();
+                    }
+                    else
+                    {
+                        z.Normalize();
+                        y = Vector3.Cross(z, x).Normalized();
+                        x = Vector3.Cross(y, z).Normalized();
+                    }
+                    t = Vector3.Lerp(skeleton.Row3.Xyz, t, weight);
+                }
+                _driven[i].Transform = new Matrix4(
+                    new Vector4(x * sx.Length, 0),
+                    new Vector4(y * sy.Length, 0),
+                    new Vector4(z * sz.Length, 0),
+                    new Vector4(t, 1)
+                );
             }
         }
     }

@@ -299,29 +299,23 @@ namespace PlayerViewer.Player
 
             if (HairArrange != null && HairArrange.TryGetValue(bone.Name, out var arr))
             {
-                //Compose the arrange SRT on top of the rest pose (PlayerCustomUtl::
-                //hideEarHair_BeforeCalcDraw): scale multiplies (clamped >= 0.01),
-                //rotation pre-multiplies, translation adds.
+                //The game's rule, applied once at bind to the rest local: each scale
+                //factor is floored at 0.01 and multiplies the rest scale; the rotation
+                //is Rz Ry Rx of the degrees (X first) applied in the bone's own frame
+                //after the rest rotation; the translation is added unrotated in the
+                //parent's frame. A hair tagged BlitzCompatible would permute the
+                //translation for children of Head_Root, but the actual hair actors are not.
                 scale = new Vector3(
-                    Math.Max(scale.X * arr.Scale.X, 0.01f),
-                    Math.Max(scale.Y * arr.Scale.Y, 0.01f),
-                    Math.Max(scale.Z * arr.Scale.Z, 0.01f)
+                    scale.X * Math.Max(arr.Scale.X, 0.01f),
+                    scale.Y * Math.Max(arr.Scale.Y, 0.01f),
+                    scale.Z * Math.Max(arr.Scale.Z, 0.01f)
                 );
-                //S2 decomp (hideEarHair_BeforeCalcDraw): finalRot = restRot * arrangeRot
-                //(column conv) = arrange applied in the bone's local frame. In OpenTK
-                //quaternion order that is rest * arrange. Euler XYZ, degrees.
-                var arrRot = Quaternion.FromEulerAngles(
-                    MathHelper.DegreesToRadians(arr.RotationDeg.X),
-                    MathHelper.DegreesToRadians(arr.RotationDeg.Y),
-                    MathHelper.DegreesToRadians(arr.RotationDeg.Z)
-                );
+                var arrRot =
+                    Quaternion.FromAxisAngle(Vector3.UnitZ, MathHelper.DegreesToRadians(arr.RotationDeg.Z))
+                    * Quaternion.FromAxisAngle(Vector3.UnitY, MathHelper.DegreesToRadians(arr.RotationDeg.Y))
+                    * Quaternion.FromAxisAngle(Vector3.UnitX, MathHelper.DegreesToRadians(arr.RotationDeg.X));
                 rot = rot * arrRot;
-                //The translate is authored in model space (Y = down folds the OCT001
-                //ponytail); hair bones inherit the head bone's 90° rest twist, so
-                //express it in the parent's bind frame before adding to the local pos.
-                var parentBind =
-                    bone.Parent != null ? RestWorldRotation(bone.Parent) : Quaternion.Identity;
-                pos += Vector3.Transform(arr.Translate, Quaternion.Invert(parentBind));
+                pos += arr.Translate;
             }
         }
 
