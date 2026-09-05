@@ -50,11 +50,40 @@ namespace PlayerViewer.Player
         const float WarmUpStep = 1.0f / 30.0f;
         const int WarmUpSteps = 30;
 
+        //The game's bone record setup, per driven bone: the cloth bone it aims at (the
+        //first child in skeleton order that the cloth knows), the quaternion that takes
+        //that child's rest local direction onto the x axis, the cloth bone whose
+        //position the segment length is kept from, and that length as the skeleton had
+        //it this frame.
+        readonly int[] _writeOrder; //driven bone indices in cloth bone order
+        readonly int[] _aimChild; //cloth bone index or -1
+        readonly Quaternion[] _aimQuat;
+        readonly bool[] _aimAligned; //child sits on the x axis: aim x at it directly
+        readonly bool[] _aimNegate;
+        readonly int[] _lengthParent; //cloth bone index or -1
+        readonly float[] _segmentLength;
+        readonly Matrix4[] _rawFrame; //this frame's deform output per driven bone
+
         HairPhysics(HairClothPiece piece, STBone[] bones)
         {
             _piece = piece;
             _bones = bones;
             _driven = piece.BoneDeforms.Select(d => bones[d.BoneIndex]).ToArray();
+
+            int nd = piece.BoneDeforms.Count;
+            _writeOrder = Enumerable
+                .Range(0, nd)
+                .OrderBy(i => piece.BoneDeforms[i].BoneIndex)
+                .ToArray();
+            _aimChild = new int[nd];
+            _aimQuat = new Quaternion[nd];
+            _aimAligned = new bool[nd];
+            _aimNegate = new bool[nd];
+            _lengthParent = new int[nd];
+            _segmentLength = new float[nd];
+            _rawFrame = new Matrix4[nd];
+            for (int i = 0; i < nd; i++)
+                SetUpAim(i);
 
             int n = piece.Particles.Length;
             _pos = new Vector3[n];
@@ -143,13 +172,63 @@ namespace PlayerViewer.Player
         public void DebugDump()
         {
             Console.WriteLine($"[HairPhys] {_piece.Name}");
+            Matrix4 headInv = Matrix4.Identity;
+            HairCollidable head = _piece.Collidables.Count > 0 ? _piece.Collidables[0] : null;
+            Vector3 ha = Vector3.Zero,
+                hb = Vector3.Zero;
+            if (head != null)
+            {
+                var hw = head.BoneOffset * _boneWorld[head.BoneIndex];
+                headInv = Matrix4.Invert(hw);
+                ha = Vector3.TransformPosition(head.Start, hw);
+                hb = Vector3.TransformPosition(head.End, hw);
+            }
+            float AxisDist(Vector3 p)
+            {
+                Vector3 ab = hb - ha;
+                float t =
+                    ab.LengthSquared > 1e-9f
+                        ? MathHelper.Clamp(Vector3.Dot(p - ha, ab) / ab.LengthSquared, 0, 1)
+                        : 0;
+                return (p - (ha + ab * t)).Length;
+            }
             for (int p = 0; p < _pos.Length; p++)
             {
                 Vector3 target = SkinnedForParticle(p);
+                Vector3 l = Vector3.TransformPosition(_pos[p], headInv);
+                Vector3 ls = Vector3.TransformPosition(target, headInv);
                 Console.WriteLine(
                     $"  p{p}{(_fixed[p] ? " FIX" : "    ")} pos=({_pos[p].X:F3},{_pos[p].Y:F3},{_pos[p].Z:F3}) "
-                        + $"skin=({target.X:F3},{target.Y:F3},{target.Z:F3}) drift={(_pos[p] - target).Length:F3}"
+                        + $"skin=({target.X:F3},{target.Y:F3},{target.Z:F3}) drift={(_pos[p] - target).Length:F3} "
+                        + $"headLocal=({l.X:F3},{l.Y:F3},{l.Z:F3}) skinLocal=({ls.X:F3},{ls.Y:F3},{ls.Z:F3}) "
+                        + $"axis={AxisDist(_pos[p]):F3} skinAxis={AxisDist(target):F3}"
                 );
+            }
+            for (int b = 0; b < _bones.Length; b++)
+            {
+                Vector3 t = _boneWorld[b].Row3.Xyz;
+                Vector3 r = _boneWorld[0].Row3.Xyz;
+                Console.WriteLine(
+                    $"  clothBone {_piece.BoneNames[b]} fed=({t.X:F3},{t.Y:F3},{t.Z:F3}) fromRoot={(t - r).Length:F3}"
+                );
+            }
+            for (int i = 0; i < _piece.BoneDeforms.Count; i++)
+            {
+                var bd = _piece.BoneDeforms[i];
+                int bi = bd.BoneIndex;
+                Matrix4 restFrame = DeformFrame(_piece.RestPositions, bd);
+                Matrix4 restRef = _piece.BoneRefPose[bi];
+                Matrix4 bind = Matrix4.Invert(_driven[i].Inverse);
+                Matrix4 now = _driven[i].Transform;
+                Matrix4 skel = _skeletonBefore != null ? _skeletonBefore[i] : now;
+                Console.WriteLine(
+                    $"  bone {_piece.BoneNames[bi]} tri=({_piece.TriangleIndices[bd.TriangleStart]},{_piece.TriangleIndices[bd.TriangleStart + 1]},{_piece.TriangleIndices[bd.TriangleStart + 2]})"
+                );
+                Console.WriteLine($"    restDeform {Fmt(restFrame)}");
+                Console.WriteLine($"    clothRef   {Fmt(restRef)}");
+                Console.WriteLine($"    sceneBind  {Fmt(bind)}");
+                Console.WriteLine($"    skeleton   {Fmt(skel)}");
+                Console.WriteLine($"    written    {Fmt(now)}");
             }
             foreach (var range in _piece.LocalRanges)
             {
@@ -188,6 +267,16 @@ namespace PlayerViewer.Player
 
             for (int i = 0; i < _bones.Length; i++)
                 _boneWorld[i] = UnitAxes(_bones[i].Transform);
+            //The segment lengths the write back keeps come from the skeleton pose of
+            //this frame, before anything is written.
+            for (int i = 0; i < _driven.Length; i++)
+                _segmentLength[i] =
+                    _lengthParent[i] >= 0
+                        ? (
+                            _driven[i].Transform.Row3.Xyz
+                            - _bones[_lengthParent[i]].Transform.Row3.Xyz
+                        ).Length
+                        : 0;
 
             SkinVertices();
 
@@ -726,6 +815,136 @@ namespace PlayerViewer.Player
         }
 
         /// <summary>
+        /// The orthonormal cloth frame of one driven bone from a set of particle
+        /// positions: rows [p0 - c, p1 - c, cross, c] of its triangle through the local
+        /// bone transform, translation raw, rotation rebuilt around the boneAxis column.
+        /// </summary>
+        Matrix4 DeformFrame(Vector3[] positions, HairBoneDeform bd)
+        {
+            Vector3 p0 = positions[_piece.TriangleIndices[bd.TriangleStart]];
+            Vector3 p1 = positions[_piece.TriangleIndices[bd.TriangleStart + 1]];
+            Vector3 p2 = positions[_piece.TriangleIndices[bd.TriangleStart + 2]];
+
+            Vector3 c = (p0 + p1 + p2) * (1.0f / 3.0f);
+            Vector3 e0 = p0 - c,
+                e1 = p1 - c;
+            Vector3 n = Vector3.Cross(e0, e1);
+
+            var frame = new Matrix4(
+                new Vector4(e0, 0),
+                new Vector4(e1, 0),
+                new Vector4(n, 0),
+                new Vector4(c, 1)
+            );
+            Matrix4 raw = bd.LocalBoneTransform * frame;
+            Vector3 r0 = raw.Row0.Xyz,
+                r2 = raw.Row2.Xyz;
+            Vector3 x,
+                y,
+                z;
+            if (_piece.BoneAxis == 0)
+            {
+                x = r0.Normalized();
+                y = Vector3.Cross(r2, x).Normalized();
+                z = Vector3.Cross(x, y).Normalized();
+            }
+            else
+            {
+                z = r2.Normalized();
+                y = Vector3.Cross(z, r0).Normalized();
+                x = Vector3.Cross(y, z).Normalized();
+            }
+            return new Matrix4(
+                new Vector4(x, 0),
+                new Vector4(y, 0),
+                new Vector4(z, 0),
+                new Vector4(raw.Row3.Xyz, 1)
+            );
+        }
+
+        Matrix4[] _skeletonBefore; //debug: the skeleton pose each driven bone had before the write
+
+        /// <summary>
+        /// What the game records for a driven bone when it binds the cloth: the first
+        /// child of the bone (skeleton order) that is a cloth bone, the rotation that
+        /// takes that child's rest local direction onto the x axis (or, when the child
+        /// already lies on x, a flag to aim x at it directly), and the parent cloth bone
+        /// the segment length is measured from.
+        /// </summary>
+        void SetUpAim(int i)
+        {
+            var piece = _piece;
+            STBone bone = _driven[i];
+            _aimChild[i] = -1;
+            _lengthParent[i] = -1;
+            _aimQuat[i] = Quaternion.Identity;
+
+            int ClothIndex(STBone b) =>
+                b == null ? -1 : Array.IndexOf(_bones, b);
+
+            if (bone.Parent != null)
+                _lengthParent[i] = ClothIndex(bone.Parent);
+
+            STBone child = bone.Children.FirstOrDefault(c => ClothIndex(c) >= 0);
+            if (child == null)
+                return;
+            _aimChild[i] = ClothIndex(child);
+
+            Vector3 d = child.Position;
+            if (d.LengthSquared <= 0)
+            {
+                _aimChild[i] = -1;
+                return;
+            }
+            d.Normalize();
+            Vector3 a = Vector3.UnitX;
+            float dot = Vector3.Dot(d, a);
+            if (Math.Abs(1.0f - Math.Abs(dot)) <= 1.19e-7f)
+            {
+                _aimAligned[i] = true;
+                _aimNegate[i] = dot < 0;
+                return;
+            }
+            if (dot < 0)
+            {
+                _aimNegate[i] = true;
+                d = -d;
+                dot = -dot;
+            }
+            float w = MathF.Sqrt((1.0f + dot) * 0.5f);
+            if (w <= 1e-6f)
+            {
+                //Opposite the axis: a half turn about any perpendicular.
+                Vector3 axis = Vector3.Cross(d, Vector3.UnitY);
+                if (axis.LengthSquared <= 1e-12f)
+                    axis = Vector3.Cross(d, Vector3.UnitZ);
+                axis.Normalize();
+                _aimQuat[i] = new Quaternion(axis, 0);
+                return;
+            }
+            Vector3 v = Vector3.Cross(d, a) / (2.0f * w);
+            _aimQuat[i] = new Quaternion(v, w);
+        }
+
+        /// <summary>The transform set position of a cloth bone: the deform output for a driven one, the fed pose otherwise.</summary>
+        Vector3 RawPosition(int clothIndex)
+        {
+            for (int i = 0; i < _piece.BoneDeforms.Count; i++)
+                if (_piece.BoneDeforms[i].BoneIndex == clothIndex)
+                    return _rawFrame[i].Row3.Xyz;
+            return _boneWorld[clothIndex].Row3.Xyz;
+        }
+
+        static Vector3 Rotate(Quaternion q, Vector3 p)
+        {
+            Vector3 v = q.Xyz;
+            return p + 2.0f * Vector3.Cross(v, Vector3.Cross(v, p) + q.W * p);
+        }
+
+        static string Fmt(Matrix4 m) =>
+            $"x=({m.M11:F3},{m.M12:F3},{m.M13:F3}) y=({m.M21:F3},{m.M22:F3},{m.M23:F3}) z=({m.M31:F3},{m.M32:F3},{m.M33:F3}) t=({m.M41:F3},{m.M42:F3},{m.M43:F3})";
+
+        /// <summary>
         /// Simple mesh bone deform: for each driven bone the frame rows are
         /// [p0 - c, p1 - c, cross(p0 - c, p1 - c), c] of its source triangle, the raw
         /// product Local * Frame gives the translation, and the rotation is rebuilt
@@ -737,7 +956,18 @@ namespace PlayerViewer.Player
         /// </summary>
         void WriteBones(Dictionary<string, ArrangeBoneParam> arrange)
         {
+            //Every deform output first: a bone aims at its child's raw origin, not at
+            //the child after its own write.
             for (int i = 0; i < _piece.BoneDeforms.Count; i++)
+            {
+                var bd = _piece.BoneDeforms[i];
+                _rawFrame[i] =
+                    bd.TriangleStart + 2 < _piece.TriangleIndices.Length
+                        ? DeformFrame(_render, bd)
+                        : _boneWorld[bd.BoneIndex];
+            }
+
+            foreach (int i in _writeOrder)
             {
                 var bd = _piece.BoneDeforms[i];
                 if (bd.TriangleStart + 2 >= _piece.TriangleIndices.Length)
@@ -749,42 +979,53 @@ namespace PlayerViewer.Player
                 if (weight <= 0)
                     continue;
 
-                Vector3 p0 = _render[_piece.TriangleIndices[bd.TriangleStart]];
-                Vector3 p1 = _render[_piece.TriangleIndices[bd.TriangleStart + 1]];
-                Vector3 p2 = _render[_piece.TriangleIndices[bd.TriangleStart + 2]];
+                Matrix4 cloth = _rawFrame[i];
+                Vector3 x = cloth.Row0.Xyz,
+                    y = cloth.Row1.Xyz,
+                    z = cloth.Row2.Xyz;
+                Vector3 t = cloth.Row3.Xyz;
 
-                Vector3 c = (p0 + p1 + p2) * (1.0f / 3.0f);
-                Vector3 e0 = p0 - c,
-                    e1 = p1 - c;
-                Vector3 n = Vector3.Cross(e0, e1);
+                //Aim: the frame is turned so the child's rest local direction points at
+                //the child's raw origin, x carried through the bind quaternion and the
+                //other two axes rebuilt from the raw z.
+                if (_aimChild[i] >= 0)
+                {
+                    Vector3 dir = RawPosition(_aimChild[i]) - t;
+                    if (dir.LengthSquared > 1e-12f)
+                    {
+                        dir.Normalize();
+                        if (_aimAligned[i])
+                            x = _aimNegate[i] ? -dir : dir;
+                        else
+                        {
+                            Vector3 local = new Vector3(
+                                Vector3.Dot(x, dir),
+                                Vector3.Dot(y, dir),
+                                Vector3.Dot(z, dir)
+                            );
+                            if (_aimNegate[i])
+                                local = -local;
+                            Vector3 v = Rotate(_aimQuat[i], local);
+                            x = v.X * x + v.Y * y + v.Z * z;
+                        }
+                        y = Vector3.Cross(z, x).Normalized();
+                        z = Vector3.Cross(x, y);
+                    }
+                }
 
-                var frame = new Matrix4(
-                    new Vector4(e0, 0),
-                    new Vector4(e1, 0),
-                    new Vector4(n, 0),
-                    new Vector4(c, 1)
-                );
-                Matrix4 raw = bd.LocalBoneTransform * frame;
-                Vector3 r0 = raw.Row0.Xyz,
-                    r2 = raw.Row2.Xyz;
-                Vector3 x,
-                    y,
-                    z;
-                if (_piece.BoneAxis == 0)
+                //The origin sits at the skeleton's segment length from the parent's
+                //current position, along the raw direction from it.
+                if (_lengthParent[i] >= 0 && _segmentLength[i] > 0)
                 {
-                    x = r0.Normalized();
-                    y = Vector3.Cross(r2, x).Normalized();
-                    z = Vector3.Cross(x, y).Normalized();
+                    Vector3 parent = _bones[_lengthParent[i]].Transform.Row3.Xyz;
+                    Vector3 d = t - parent;
+                    if (d.LengthSquared > 1e-12f)
+                        t = parent + d.Normalized() * _segmentLength[i];
                 }
-                else
-                {
-                    z = r2.Normalized();
-                    y = Vector3.Cross(z, r0).Normalized();
-                    x = Vector3.Cross(y, z).Normalized();
-                }
-                Vector3 t = raw.Row3.Xyz;
 
                 Matrix4 skeleton = _driven[i].Transform;
+                _skeletonBefore ??= new Matrix4[_piece.BoneDeforms.Count];
+                _skeletonBefore[i] = skeleton;
                 Vector3 sx = skeleton.Row0.Xyz,
                     sy = skeleton.Row1.Xyz,
                     sz = skeleton.Row2.Xyz;

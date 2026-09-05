@@ -69,6 +69,7 @@ namespace PlayerViewer.Core
         public List<GearEntry> Clothes = new();
         public List<GearEntry> Shoes = new();
         public List<GearEntry> Hair = new();
+        public HashSet<string> BlitzCompatibleHairs = new();
         public List<GearEntry> Eyebrow = new();
         public List<GearEntry> Bottom = new();
         public List<GearEntry> Tank = new();
@@ -120,6 +121,7 @@ namespace PlayerViewer.Core
             LoadGearTable("GearInfoClothes", GearSlot.Clothes, Clothes, ClothesRows);
             LoadGearTable("GearInfoShoes", GearSlot.Shoes, Shoes, ShoesRows);
             LoadSimpleTable("HairInfo", GearSlot.Hair, Hair);
+            LoadHairTags();
             LoadSimpleTable("EyebrowInfo", GearSlot.Eyebrow, Eyebrow);
             LoadGearTable("BottomInfo", GearSlot.Bottom, Bottom, BottomRows);
             LoadSimpleTable("TankInfo", GearSlot.Tank, Tank);
@@ -179,6 +181,37 @@ namespace PlayerViewer.Core
                     return c != 0 ? c : a.Variation.CompareTo(b.Variation);
                 }
             );
+        }
+
+        /// <summary>
+        /// Reads the actor tag table: a bit per (path, tag) with the paths stored as
+        /// directory, name, class triples. Keeps the hair names carrying BlitzCompatible.
+        /// </summary>
+        void LoadHairTags()
+        {
+            var file = Romfs.FindFiles("RSDB", "Tag.Product.*.rstbl.byml*").LastOrDefault();
+            if (file == null)
+                return;
+            var root = Byml.AsHash(new Byml(Romfs.Decompress(File.ReadAllBytes(file))).Root);
+            if (
+                root == null
+                || root.GetValueOrDefault("TagList") is not List<object> tags
+                || root.GetValueOrDefault("PathList") is not List<object> paths
+                || root.GetValueOrDefault("BitTable") is not byte[] bits
+            )
+                return;
+            int tag = tags.IndexOf("BlitzCompatible");
+            if (tag < 0)
+                return;
+            int rows = paths.Count / 3;
+            for (int row = 0; row < rows; row++)
+            {
+                if (paths[3 * row + 2] as string != ".spl__HairInfo.gyml")
+                    continue;
+                long bit = (long)row * tags.Count + tag;
+                if (bit / 8 < bits.Length && ((bits[bit / 8] >> (int)(bit % 8)) & 1) != 0)
+                    BlitzCompatibleHairs.Add(paths[3 * row + 1] as string ?? "");
+            }
         }
 
         void LoadSimpleTable(string table, GearSlot slot, List<GearEntry> target)

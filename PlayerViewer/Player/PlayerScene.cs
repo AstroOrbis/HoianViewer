@@ -8,6 +8,7 @@ using OpenTK;
 using PlayerViewer.Core;
 using PlayerViewer.Core.Formats;
 using Toolbox.Core;
+using Toolbox.Core.Animations;
 using Toolbox.Core.IO;
 
 namespace PlayerViewer.Player
@@ -50,6 +51,9 @@ namespace PlayerViewer.Player
         public BfresMaterialAnim CurrentShaderParam { get; private set; }
         public BfresVisibilityAnim CurrentBoneVis { get; private set; }
         public float AnimFrame { get; private set; }
+        //Frame clock for the gear's own looping animations; runs with the player
+        //animation's pause and speed but not its frame.
+        public float IdleFrame { get; private set; }
         public float AnimSpeed = 1.0f;
         public bool AnimPaused = false;
 
@@ -308,31 +312,69 @@ namespace PlayerViewer.Player
 
         /// <summary>
         /// Texture variations are frames of a material anim named after the model.
+        /// Material anims with an "_Auto" suffix play on their own (like MSN307's
+        /// scrolling texture), as does a looping one named after the model on a gear
+        /// without variations. Gear skeletal anims never play; the game leaves
+        /// Hed_MSN111's weeds at rest.
         /// </summary>
         void ApplyVariationAnim(PartModel part, GearEntry entry)
         {
             if (part?.Bfres == null || entry == null)
                 return;
-            var varAnim = part.Bfres.MaterialAnimations.FirstOrDefault(x =>
-                x.Name == part.ModelName
-            );
-            if (varAnim != null)
-                ScopedAnimPlayer.ApplyMaterialAnim(
-                    varAnim,
-                    entry.Variation,
-                    new[] { part.ModelAsset }
-                );
+            part.IdleMaterialAnims.Clear();
+            foreach (var anim in part.Bfres.MaterialAnimations)
+            {
+                bool named = anim.Name == part.ModelName;
+                if (named && entry.VariationCount > 1)
+                    ScopedAnimPlayer.ApplyMaterialAnim(
+                        anim,
+                        entry.Variation,
+                        new[] { part.ModelAsset }
+                    );
+                else if (IsIdleAnim(anim, named))
+                    part.IdleMaterialAnims.Add(anim);
+            }
+        }
+
+        static bool IsIdleAnim(STAnimation anim, bool namedAfterModel)
+        {
+            if (anim.FrameCount <= 1)
+                return false;
+            return anim.Name.EndsWith("_Auto", StringComparison.OrdinalIgnoreCase)
+                || (namedAfterModel && anim.Loop);
+        }
+
+        static float IdleAnimFrame(STAnimation anim, float clock)
+        {
+            float count = Math.Max(anim.FrameCount, 1);
+            return anim.Loop ? clock % count : Math.Min(clock, count - 1);
+        }
+
+        void UpdateIdleAnims()
+        {
+            foreach (var part in Parts.Values)
+            {
+                foreach (var anim in part.IdleMaterialAnims)
+                    ScopedAnimPlayer.ApplyMaterialAnim(
+                        anim,
+                        IdleAnimFrame(anim, IdleFrame),
+                        new[] { part.ModelAsset }
+                    );
+            }
         }
 
         #endregion
 
         #region Gear setters
 
+        //The model root names a headgear skeleton uses. They are player bone names
+        //too (at the feet), so the map has to name them rather than let them bind.
         static readonly Dictionary<string, string> HeadBoneMap = new()
         {
             { "Root", "Head" },
             { "Root_Model", "Head" },
             { "Head_Root", "Head" },
+            { "nw4f_root", "Head" },
         };
 
         public void SetHair(GearEntry entry)
@@ -359,6 +401,8 @@ namespace PlayerViewer.Player
             part.ResolveWelds(Human.Skeleton, HeadBoneMap);
             part.AttachBone =
                 part.Skeleton.SearchBone("Head_Root") ?? part.Skeleton.SearchBone("Root");
+            part.BlitzCompatible =
+                !entry.IsCustom && Database.BlitzCompatibleHairs.Contains(entry.RowId);
             Parts[PartKind.Hair] = part;
 
             LoadHairPhysics(entry, part);
@@ -505,9 +549,15 @@ namespace PlayerViewer.Player
             ApplyVariationAnim(part, entry);
             //Some headgear name their root after the model (Hed_EYE002) instead of
             //Root/Head_Root; weld whatever the skeleton root is onto the head bone.
+            //A root that is a player bone (Hed_COP103 hangs off Spine_3) binds to it
+            //by name instead, like every other same-named bone.
             var rootBone = part.Skeleton.Bones.FirstOrDefault(b => b.Parent == null);
             var headMap = new Dictionary<string, string>(HeadBoneMap);
-            if (rootBone != null && !headMap.ContainsKey(rootBone.Name))
+            if (
+                rootBone != null
+                && !headMap.ContainsKey(rootBone.Name)
+                && Human.Skeleton.SearchBone(rootBone.Name) == null
+            )
                 headMap[rootBone.Name] = "Head";
             part.ResolveWelds(Human.Skeleton, headMap, uprightWeld: true);
             part.AttachBone =
@@ -1328,6 +1378,9 @@ namespace PlayerViewer.Player
             if (Human == null)
                 return;
 
+            if (!AnimPaused)
+                IdleFrame += deltaSeconds * 60.0f * AnimSpeed;
+
             if (CurrentSkeletal != null && !AnimPaused)
             {
                 AnimFrame += deltaSeconds * 60.0f * AnimSpeed;
@@ -1364,6 +1417,7 @@ namespace PlayerViewer.Player
             ApplyBodyMaskSampler();
 
             ApplyEarHide();
+            UpdateIdleAnims();
 
             //Weld all parts to the updated human skeleton.
             foreach (var part in Parts.Values)

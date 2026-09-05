@@ -62,6 +62,10 @@ namespace PlayerViewer.Player
         //Hair-arrange bone SRT overrides (hair parts only), keyed by bone name.
         public Dictionary<string, ArrangeBoneParam> HairArrange;
 
+        //The hair actor carries the BlitzCompatible tag (a Splatoon 2 hair): the arrange
+        //translation of a bone under Head_Root is read as (y, z, x).
+        public bool BlitzCompatible;
+
         //Static local-pose override (weapon carry pose baked from the model's own
         //skeletal anim, e.g. roller CloseOff), keyed by bone name.
         public Dictionary<string, PoseSrt> PoseOverride;
@@ -85,6 +89,16 @@ namespace PlayerViewer.Player
         //cancels the head bone's 90° rest twist - the ManualBindSRT values in
         //GearHeadParamSet are tiny nudges, so the base bind must already be upright.
         public Matrix4[] WeldPre;
+
+        //Per-bone: the weld came through the name map (an attach point onto the
+        //head) rather than a same-named human bone. Gear skeletons bind to the
+        //player's by name (the ear cuffs' Ear_L, a helmet's Spine_3 and Neck), and
+        //those bones follow the player bone as is.
+        public bool[] WeldMapped;
+
+        //Looping material anims the gear plays on its own (the "_Auto" ones),
+        //driven by the scene's idle clock.
+        public List<BfresMaterialAnim> IdleMaterialAnims = new();
 
         //Bones in parent-first order for pose propagation.
         public STBone[] OrderedBones;
@@ -113,11 +127,15 @@ namespace PlayerViewer.Player
         {
             WeldTargets = new STBone[Skeleton.Bones.Count];
             WeldPre = new Matrix4[Skeleton.Bones.Count];
+            WeldMapped = new bool[Skeleton.Bones.Count];
             for (int i = 0; i < Skeleton.Bones.Count; i++)
             {
                 string name = Skeleton.Bones[i].Name;
                 if (nameMap != null && nameMap.TryGetValue(name, out string mapped))
+                {
                     name = mapped;
+                    WeldMapped[i] = true;
+                }
                 else if (mapOnly)
                 {
                     //Weapons: only the mapped root welds. Their internal bones reuse
@@ -136,7 +154,7 @@ namespace PlayerViewer.Player
                 //The gear bone's own rest rotation is ignored: models like Hed_COP111
                 //re-use the player skeleton's Head bone (with its ~90° rest twist)
                 //but the mesh is still authored upright in model space.
-                if (uprightWeld && WeldTargets[i] != null && !mirrorLR)
+                if (uprightWeld && WeldMapped[i] && WeldTargets[i] != null && !mirrorLR)
                 {
                     var humanRot = RestWorldRotation(WeldTargets[i]);
                     WeldPre[i] = Matrix4.CreateFromQuaternion(Quaternion.Invert(humanRot));
@@ -191,45 +209,58 @@ namespace PlayerViewer.Player
         /// bones. Unmatched bones are posed from their parent using their rest local
         /// SRT (with hair-arrange overrides when present).
         /// </summary>
-        //Segment scale compensate state of the last weld pass. Bfres skeletons use
-        //Maya scaling: a bone's own scale affects its skinned vertices and the
-        //POSITIONS of direct children, but never compounds into descendants'
-        //rotation/scale (otherwise one arrange-collapsed bone would flatten the
-        //whole chain below it instead of just its own mesh segment).
+        //State of the last weld pass, per bone: the full world matrix, scale
+        //included, and the bone's own local scale. Bfres skeletons use Maya scaling:
+        //a bone's own scale affects its skinned vertices and the positions of its
+        //children; a child with segment scale compensate drops that scale from its own
+        //axes, one without it inherits it (Scaler_B under Scaler_A in Har_SQD013, which
+        //an arrange preset shrinks to fit a hat's hole).
         readonly Dictionary<STBone, Vector3> _weldScale = new();
-        readonly Dictionary<STBone, Matrix4> _weldRT = new(); //scale-free world
+        readonly Dictionary<STBone, Matrix4> _weldFull = new();
 
         public void ApplyWeld()
         {
             if (WeldTargets == null)
                 return;
             _weldScale.Clear();
-            _weldRT.Clear();
+            _weldFull.Clear();
 
             foreach (var bone in OrderedBones)
             {
                 int i = Skeleton.Bones.IndexOf(bone);
                 var target = WeldTargets[i];
 
-                Matrix4 rt; //world rotation+translation (no scale)
-                Vector3 scale; //own local scale (applies to skinning + child positions)
+                Matrix4 full; //world matrix, scale included
+                Vector3 scale; //own local scale
                 if (target != null)
                 {
-                    rt = WeldPre[i] * target.Transform;
-                    //Headgear (RestoreAttachBind): every welded bone is an attach
-                    //point onto the head, so the gear SRT offset applies to all of
-                    //them - meshes may rig to Root_Model rather than Root (Hed_AMB020).
-                    //Other parts (weapons) only offset the mapped root.
-                    bool isAttach = RestoreAttachBind || bone == AttachBone;
-                    if (isAttach && AttachOffset != Matrix4.Identity)
-                        rt = AttachOffset * rt;
-                    //Headgear: the game binds the gear's model origin to the head
-                    //bone. Most gear roots have an identity bind so this is a no-op,
-                    //but some (Hed_HAT020) are authored offset from the origin with
-                    //the offset in the bind pose; skinning multiplies by the inverse
-                    //bind, so put the bind back or the authored offset is lost.
-                    if (RestoreAttachBind)
-                        rt = Matrix4.Invert(bone.Inverse) * rt;
+                    Matrix4 rt = WeldPre[i] * target.Transform; //rotation and translation only
+                    if (RestoreAttachBind && !WeldMapped[i])
+                    {
+                        //A headgear bone bound to the player bone of its name. The
+                        //gear SRT offset still moves its mesh, applied in gear model
+                        //space so the gear stays rigid (the ear cuffs' per hair nudges
+                        //act on a mesh that is entirely on Ear_L).
+                        if (AttachOffset != Matrix4.Identity)
+                            rt = Matrix4.Invert(bone.Inverse) * AttachOffset * bone.Inverse * rt;
+                    }
+                    else
+                    {
+                        //Headgear (RestoreAttachBind): every mapped bone is an attach
+                        //point onto the head, so the gear SRT offset applies to all of
+                        //them - meshes may rig to Root_Model rather than Root (Hed_AMB020).
+                        //Other parts (weapons) only offset the mapped root.
+                        bool isAttach = RestoreAttachBind || bone == AttachBone;
+                        if (isAttach && AttachOffset != Matrix4.Identity)
+                            rt = AttachOffset * rt;
+                        //Headgear: the game binds the gear's model origin to the head
+                        //bone. Most gear roots have an identity bind so this is a no-op,
+                        //but some (Hed_HAT020) are authored offset from the origin with
+                        //the offset in the bind pose; skinning multiplies by the inverse
+                        //bind, so put the bind back or the authored offset is lost.
+                        if (RestoreAttachBind)
+                            rt = Matrix4.Invert(bone.Inverse) * rt;
+                    }
                     //Hair arrange on welded bones (Head_Root): rotation acts in the
                     //bone's local frame, translate in model space, scale is the
                     //bone's own (compensated) scale.
@@ -242,6 +273,7 @@ namespace PlayerViewer.Player
                     }
                     if (Mirror)
                         rt = NegateMatrix(rt);
+                    full = Matrix4.CreateScale(scale) * rt;
                 }
                 else
                 {
@@ -249,24 +281,33 @@ namespace PlayerViewer.Player
                         bone.Parent != null && _weldScale.TryGetValue(bone.Parent, out var ps)
                             ? ps
                             : Vector3.One;
-                    Matrix4 parentRT =
-                        bone.Parent != null && _weldRT.TryGetValue(bone.Parent, out var prt)
-                            ? prt
+                    Matrix4 parentFull =
+                        bone.Parent != null && _weldFull.TryGetValue(bone.Parent, out var pf)
+                            ? pf
                             : Matrix4.Identity;
 
                     GetLocalPose(bone, out scale, out Quaternion rot, out Vector3 pos);
-                    //Child position inherits the parent's own scale (Maya behavior);
-                    //rotation/scale do not.
-                    pos *= parentScale;
-                    rt =
-                        Matrix4.CreateFromQuaternion(rot)
+                    //The engine's Maya composition: the parent's scale stays on the
+                    //offset; a compensating bone takes it off its own axes with the
+                    //inverse between its rotation and its translation.
+                    Matrix4 compensate = bone.UseSegmentScaleCompensate
+                        ? Matrix4.CreateScale(
+                            1.0f / parentScale.X,
+                            1.0f / parentScale.Y,
+                            1.0f / parentScale.Z
+                        )
+                        : Matrix4.Identity;
+                    full =
+                        Matrix4.CreateScale(scale)
+                        * Matrix4.CreateFromQuaternion(rot)
+                        * compensate
                         * Matrix4.CreateTranslation(pos)
-                        * parentRT;
+                        * parentFull;
                 }
 
-                _weldRT[bone] = rt;
+                _weldFull[bone] = full;
                 _weldScale[bone] = scale;
-                bone.Transform = Matrix4.CreateScale(scale) * rt;
+                bone.Transform = full;
             }
         }
 
@@ -303,8 +344,8 @@ namespace PlayerViewer.Player
                 //factor is floored at 0.01 and multiplies the rest scale; the rotation
                 //is Rz Ry Rx of the degrees (X first) applied in the bone's own frame
                 //after the rest rotation; the translation is added unrotated in the
-                //parent's frame. A hair tagged BlitzCompatible would permute the
-                //translation for children of Head_Root, but the actual hair actors are not.
+                //parent's frame, its components permuted for a child of Head_Root of a
+                //hair tagged BlitzCompatible.
                 scale = new Vector3(
                     scale.X * Math.Max(arr.Scale.X, 0.01f),
                     scale.Y * Math.Max(arr.Scale.Y, 0.01f),
@@ -315,7 +356,10 @@ namespace PlayerViewer.Player
                     * Quaternion.FromAxisAngle(Vector3.UnitY, MathHelper.DegreesToRadians(arr.RotationDeg.Y))
                     * Quaternion.FromAxisAngle(Vector3.UnitX, MathHelper.DegreesToRadians(arr.RotationDeg.X));
                 rot = rot * arrRot;
-                pos += arr.Translate;
+                Vector3 t = arr.Translate;
+                if (BlitzCompatible && bone.Parent != null && bone.Parent.Name == "Head_Root")
+                    t = new Vector3(t.Y, t.Z, t.X);
+                pos += t;
             }
         }
 

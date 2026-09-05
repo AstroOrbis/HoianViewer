@@ -62,6 +62,13 @@ namespace PlayerViewer.Core.Formats
             {
                 case 0xA0:
                     return _strings[ReadU32((int)valueOrOffset)];
+                case 0xA1:
+                {
+                    int size = (int)ReadU32((int)valueOrOffset);
+                    var bytes = new byte[size];
+                    Array.Copy(_data, (int)valueOrOffset + 4, bytes, 0, size);
+                    return bytes;
+                }
                 case 0xC0:
                     return ReadArray(valueOrOffset);
                 case 0xC1:
@@ -92,6 +99,7 @@ namespace PlayerViewer.Core.Formats
         {
             switch (type)
             {
+                case 0xA1:
                 case 0xC0:
                 case 0xC1:
                 case 0xD4:
